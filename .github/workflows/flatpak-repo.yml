@@ -7,7 +7,7 @@ name: Flatpak repository (GitHub Pages)
 #
 #   1. Repo Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 #   2. (Recommended) Sign the repo so users don't need --no-gpg-verify:
-#        - generate a key:   gpg --quick-gen-key "Lyre <you@example.com>"
+#        - generate a key:   gpg --quick-gen-key "Easel <you@example.com>"
 #        - export public:    gpg --armor --export <KEYID> > key.gpg   (ship this)
 #        - export private:   gpg --armor --export-secret-keys <KEYID>
 #        - add two repo secrets: FLATPAK_GPG_KEY (the private-key armor) and
@@ -48,7 +48,7 @@ jobs:
       - name: Build and stage repo
         uses: andyholmes/flatter@main
         with:
-          files: io.github.drvonmiau.Lyre.json
+          files: io.github.drvonmiau.Easel.json
           upload-pages-artifact: true
           # gpg-sign: ${{ secrets.FLATPAK_GPG_KEYID }}
 

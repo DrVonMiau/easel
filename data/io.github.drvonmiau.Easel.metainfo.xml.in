@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>io.github.drvonmiau.Easel</id>
+	<metadata_license>CC0-1.0</metadata_license>
+	<project_license>GPL-3.0-or-later</project_license>
+	<name>Easel</name>
+	<summary>Browse your local photos</summary>
+	<developer id="io.github.drvonmiau">
+		<name>Daniel</name>
+	</developer>
+	<description>
+	  <p>
+	    Easel is a calm, focused gallery for the photos you already have on
+	    disk. Browse everything at once or by album, keep favourites, and open
+	    any picture full-screen — all without an account or a cloud service.
+	  </p>
+	  <p>Features:</p>
+	  <ul>
+	    <li>A clean grid of every photo, or grouped into albums by folder</li>
+	    <li>A full-window lightbox with left/right navigation</li>
+	    <li>Favourites, kept apart in their own view</li>
+	    <li>Folder watching, light and dark themes</li>
+	  </ul>
+	</description>
+	<launchable type="desktop-id">io.github.drvonmiau.Easel.desktop</launchable>
+	<content_rating type="oars-1.1"/>
+	<branding>
+		<color type="primary" scheme_preference="light">#dfe3f5</color>
+		<color type="primary" scheme_preference="dark">#2b3145</color>
+	</branding>
+	<url type="homepage">https://github.com/DrVonMiau/easel</url>
+	<url type="bugtracker">https://github.com/DrVonMiau/easel/issues</url>
+	<url type="vcs-browser">https://github.com/DrVonMiau/easel</url>
+	<requires>
+		<display_length compare="ge">768</display_length>
+	</requires>
+	<supports>
+		<control>keyboard</control>
+		<control>pointing</control>
+	</supports>
+	<releases>
+		<release version="0.1.0" date="2026-07-21">
+			<description>
+				<p>Initial release of Easel — the tool of each art, recast for photos. Browse your local pictures on a clean paper card, group them into albums, keep favourites, and open any photo in a full-window lightbox.</p>
+			</description>
+		</release>
+	</releases>
+</component>

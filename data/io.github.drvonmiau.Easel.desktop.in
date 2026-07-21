@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Easel
+Comment=Browse your local photo gallery
+Exec=easel
+Icon=io.github.drvonmiau.Easel
+Terminal=false
+Type=Application
+Categories=GTK;Graphics;Photography;Viewer;
+Keywords=photos;gallery;images;pictures;viewer;
+StartupNotify=true

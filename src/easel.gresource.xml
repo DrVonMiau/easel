@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/drvonmiau/Easel">
+    <file preprocess="xml-stripblanks">window.ui</file>
+    <file preprocess="xml-stripblanks">gtk/help-overlay.ui</file>
+    <file compressed="true">style.css</file>
+    <file>icons/scalable/actions/easel-more-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-sort-symbolic.svg</file>
+  </gresource>
+</gresources>

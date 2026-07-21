@@ -24,15 +24,15 @@ jobs:
       - name: Build bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: io.github.drvonmiau.Lyre.flatpak
-          manifest-path: io.github.drvonmiau.Lyre.json
+          bundle: io.github.drvonmiau.Easel.flatpak
+          manifest-path: io.github.drvonmiau.Easel.json
           cache-key: flatpak-builder-${{ github.sha }}
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lyre-flatpak-bundle
-          path: io.github.drvonmiau.Lyre.flatpak
+          name: easel-flatpak-bundle
+          path: io.github.drvonmiau.Easel.flatpak
 
   release:
     name: Attach bundle to release
@@ -45,9 +45,9 @@ jobs:
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
         with:
-          name: lyre-flatpak-bundle
+          name: easel-flatpak-bundle
 
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          files: io.github.drvonmiau.Lyre.flatpak
+          files: io.github.drvonmiau.Easel.flatpak
