@@ -7,9 +7,25 @@ in the Flatpak runtime.
 """
 import math
 import os
+import sys
 from collections import OrderedDict
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gsk, Gtk
+
+# Report the first few image-load failures to stderr, with the reason, so a
+# problem that only shows up in the packaged runtime (a permission error vs a
+# decode error) is diagnosable from the run console instead of guesswork.
+_LOAD_FAIL_LOGGED = 0
+_LOAD_FAIL_LOG_MAX = 8
+
+
+def _log_load_failure(path, exc):
+    global _LOAD_FAIL_LOGGED
+    if _LOAD_FAIL_LOGGED >= _LOAD_FAIL_LOG_MAX:
+        return
+    _LOAD_FAIL_LOGGED += 1
+    print(f"easel: could not load image {path!r}: {type(exc).__name__}: {exc}",
+          file=sys.stderr)
 
 STRIPE_STEP = 7
 STRIPE_WIDTH = 2.4
@@ -50,7 +66,8 @@ def load_full_texture(path):
         pass
     try:
         return _texture_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file(path))
-    except Exception:
+    except Exception as exc:
+        _log_load_failure(path, exc)
         return None
 
 
@@ -79,6 +96,7 @@ def load_thumbnail(path, size):
         pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
         texture = _texture_from_pixbuf(pixbuf)
     except Exception:
+        # load_full_texture logs its own failure if the fallback also fails.
         texture = load_full_texture(path)
     if texture is None:
         return None

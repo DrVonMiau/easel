@@ -9,7 +9,8 @@
         "--socket=fallback-x11",
         "--socket=wayland",
         "--device=dri",
-        "--filesystem=xdg-pictures",
+        "--filesystem=home:ro",
+        "--filesystem=xdg-pictures:ro",
         "--filesystem=host-os:ro",
         "--filesystem=xdg-run/gvfs",
         "--filesystem=xdg-run/gvfsd"

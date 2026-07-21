@@ -524,7 +524,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _tile_menu_closed(self, box):
         box._menu_open = False
-        if not box._motion.get_contains_pointer():
+        if not box._motion.get_property("contains-pointer"):
             box.menu_btn.set_visible(False)
             box.heart.set_visible(False)
 
@@ -644,7 +644,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
             def on_closed(_p):
                 box._menu_open = False
-                if not box._motion.get_contains_pointer():
+                if not box._motion.get_property("contains-pointer"):
                     box.menu_btn.set_visible(False)
 
             popover.connect("closed", on_closed)
