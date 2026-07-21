@@ -1,0 +1,6 @@
+data/io.github.drvonmiau.Lyre.desktop.in
+data/io.github.drvonmiau.Lyre.metainfo.xml.in
+data/io.github.drvonmiau.Lyre.gschema.xml
+src/main.py
+src/window.py
+src/window.ui

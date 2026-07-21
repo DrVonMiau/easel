@@ -1,0 +1,639 @@
+/* Lyre — system palette with lavender & gold accents.
+   Surfaces and primary text come from libadwaita's named colors
+   (@window_bg_color, @card_bg_color, @window_fg_color, …) so both themes
+   track the system Adwaita palette; colour is reserved for accents:
+   lavender for interactive elements (buttons, sliders, links, the playing
+   marker) and gold for favourites. Secondary text is a lavender tint —
+   darker on the light theme, lighter on the dark one.
+   IBM Plex Sans/Mono are bundled by the Flatpak manifest; the generic
+   fallbacks only matter for non-Flatpak development runs. */
+
+/* Interactive accent */
+@define-color lyre_lavender #8a70bd;
+@define-color lyre_lavender_light #b6a3d8;
+/* Favourites */
+@define-color lyre_gold #c1962b;
+@define-color lyre_gold_light #ddb964;
+/* Secondary text */
+@define-color lyre_text_soft #7a6a9e;
+@define-color lyre_text_soft_dark #b3a3d4;
+
+/* The desktop behind the paper card: derived from the system window
+   colour, shaded a touch on light so the white card still reads. */
+.root-bg {
+  background-color: shade(@window_bg_color, 0.94);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+window.dark .root-bg {
+  background-color: @window_bg_color;
+}
+
+link,
+.root-bg link {
+  color: @lyre_lavender;
+}
+
+/* System switches and checks pick up the lavender accent instead of the
+   stock Adwaita blue. A single shade serves both themes (as Adwaita's own
+   accent blue does) because the preferences dialog is a separate window
+   the .dark scoping below can't reach. */
+switch:checked {
+  background-color: @lyre_lavender;
+}
+
+checkbutton check:checked,
+checkbutton radio:checked {
+  background-color: @lyre_lavender;
+}
+
+/* ---------- custom titlebar ---------- */
+
+
+.titlebar-icon {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.55);
+}
+
+.titlebar-icon:hover,
+.titlebar-icon:checked {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.07);
+}
+
+/* ---------- titlebar: tabs + search ---------- */
+
+/* Segmented pill groups: the library tabs and the curated tabs each sit in
+   a soft rounded container; the active tab is a raised pill inside it. */
+.tab-group {
+  background-color: alpha(@window_fg_color, 0.06);
+  border-radius: 12px;
+  padding: 3px;
+}
+
+.tab-btn {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: alpha(@window_fg_color, 0.55);
+  padding: 5px 14px;
+  min-height: 0;
+  border-radius: 9px;
+  background: none;
+}
+
+/* Some fonts paint ascenders above their declared line box and GTK clips
+   at the *label's* allocation, so padding on the button can never fix the
+   cropped tops — the label node itself needs the headroom. */
+.tab-btn label,
+.back-btn label {
+  padding-top: 3px;
+}
+
+.tab-btn:hover {
+  color: @window_fg_color;
+}
+
+.tab-btn.tab-active {
+  color: @window_fg_color;
+  font-weight: 600;
+  background-color: @card_bg_color;
+  box-shadow: 0 1px 3px alpha(#000, 0.12);
+}
+
+.search-entry {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: @window_fg_color;
+  border: 1px solid alpha(@window_fg_color, 0.15);
+  border-radius: 7px;
+  padding: 7px 12px;
+  background-color: @view_bg_color;
+  min-height: 0;
+}
+
+.search-entry:focus-within {
+  border-color: @lyre_lavender;
+}
+
+/* ---------- paper card ---------- */
+
+.paper {
+  background-color: @card_bg_color;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 1px 2px alpha(#000, 0.04), 0 12px 32px alpha(#000, 0.08);
+}
+
+.back-btn {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: alpha(@window_fg_color, 0.7);
+  border: 1px solid alpha(@window_fg_color, 0.18);
+  border-radius: 7px;
+  padding: 7px 14px;
+  background: none;
+}
+
+.back-btn:hover {
+  border-color: @lyre_lavender;
+  color: @window_fg_color;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: @lyre_text_soft;
+}
+
+.filter-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: alpha(@lyre_text_soft, 0.75);
+}
+
+.mono-dim {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: @lyre_text_soft;
+}
+
+.mono-dim-sm {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: @lyre_text_soft;
+}
+
+/* ---------- artwork swatches ---------- */
+
+.swatch {
+  background-color: alpha(@window_fg_color, 0.04);
+  border: 1px solid alpha(@window_fg_color, 0.08);
+  border-radius: 10px;
+  /* stripe pattern color (picked up by the placeholder drawing) */
+  color: alpha(@window_fg_color, 0.12);
+}
+
+.swatch.card-swatch {
+  box-shadow: 0 2px 10px alpha(#000, 0.14), 0 1px 3px alpha(#000, 0.07);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+/* Hovering a card lifts its artwork: a small scale + a deeper shadow.
+   The translate keeps the ~192px swatch's scale centred (GTK transforms
+   from the top-left, and translate needs px units — not percentages). */
+.card-box:hover .card-swatch {
+  transform: translate(-2px, -2px) scale(1.02);
+  box-shadow: 0 10px 26px alpha(#000, 0.22), 0 3px 8px alpha(#000, 0.12);
+}
+
+/* Three-dot menu button on cards. */
+.card-menu-btn {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.5);
+  background: none;
+}
+
+.card-menu-btn:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.07);
+}
+
+.swatch.chip-selected {
+  border: 2px solid @lyre_lavender;
+}
+
+.swatch-caption {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: @lyre_text_soft;
+  background-color: alpha(@window_bg_color, 0.8);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+/* ---------- artists / albums grids ---------- */
+
+.card-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: @window_fg_color;
+}
+
+gridview.card-grid,
+gridview.card-grid > child {
+  background: none;
+  box-shadow: none;
+  outline: none;
+}
+
+gridview.card-grid > child:hover,
+gridview.card-grid > child:selected,
+gridview.card-grid > child:focus {
+  background: none;
+  box-shadow: none;
+}
+
+/* ---------- artist detail ---------- */
+
+.artist-heading {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 30px;
+  font-weight: 600;
+  color: @window_fg_color;
+  letter-spacing: -0.01em;
+}
+
+.chip-label {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 11.5px;
+  color: alpha(@window_fg_color, 0.8);
+}
+
+/* ---------- track rows (library + detail) ---------- */
+
+.track-row {
+  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+  /* breathing room between the last text line and the divider */
+  padding-top: 3px;
+  padding-bottom: 10px;
+}
+
+.track-row:hover {
+  background-color: alpha(@window_fg_color, 0.04);
+}
+
+.track-list-top-rule {
+  border-top: 1px solid alpha(@window_fg_color, 0.1);
+}
+
+.track-index {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: alpha(@window_fg_color, 0.35);
+}
+
+.track-index.playing {
+  color: @lyre_lavender;
+}
+
+.track-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: @window_fg_color;
+}
+
+.track-title.playing {
+  font-weight: 600;
+  color: @lyre_lavender;
+}
+
+listview > row,
+listview > row:hover,
+listview > row:selected,
+listview > row:focus {
+  background: none;
+  box-shadow: none;
+}
+
+/* Tracks / Favourites tabs: rows sit directly on the paper with a light
+   divider line between them. */
+
+listview.track-cells {
+  background: none;
+}
+
+.track-cells .track-row {
+  background: none;
+  border-radius: 0;
+  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+  padding: 3px 8px 10px 8px;
+}
+
+.track-cells .track-row:hover {
+  background-color: alpha(@window_fg_color, 0.04);
+}
+
+/* ---------- player panel ---------- */
+
+.player-panel {
+  background: none;
+}
+
+.upnext-row {
+  padding: 6px 4px;
+  border-radius: 7px;
+}
+
+.upnext-row:hover {
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.upnext-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: @window_fg_color;
+}
+
+.now-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: @window_fg_color;
+}
+
+.now-artist {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: @lyre_text_soft;
+}
+
+.time-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  color: alpha(@lyre_text_soft, 0.85);
+}
+
+.transport-btn {
+  color: alpha(@window_fg_color, 0.65);
+  font-size: 18px;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.transport-btn:hover {
+  color: @window_fg_color;
+}
+
+.mini-transport {
+  color: alpha(@window_fg_color, 0.4);
+  padding: 2px;
+  min-width: 0;
+  min-height: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.mini-transport:hover {
+  color: @window_fg_color;
+  background: none;
+}
+
+.mini-transport:checked {
+  color: @lyre_lavender;
+  background: none;
+}
+
+.upnext-clear {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: @lyre_text_soft;
+  padding: 2px 8px;
+  min-height: 0;
+  border-radius: 7px;
+}
+
+.upnext-clear:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.play-btn {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 9999px;
+  background-color: @lyre_lavender;
+  color: #ffffff;
+  font-size: 16px;
+  padding: 0;
+  box-shadow: none;
+}
+
+.play-btn:hover {
+  background-color: shade(@lyre_lavender, 1.08);
+}
+
+/* Flatten GtkScale into a thin progress/volume bar with no visible handle,
+   matching the mockup's simple filled-track look, while staying draggable.
+   GTK quirk: the visible trough height follows the hidden grab dot's box,
+   so the dot's min-size is kept tiny (6px, -2px margins) — negative
+   margins alone can't thin the bar. */
+
+.progress-scale,
+.volume-scale {
+  min-height: 2px;
+  min-width: 4px;
+  /* hairline bar, but a comfortable click/drag target */
+  padding: 8px 0;
+}
+
+.progress-scale trough,
+.volume-scale trough {
+  min-height: 2px;
+  min-width: 4px;
+  border-radius: 1px;
+  background-color: alpha(@window_fg_color, 0.18);
+  border: none;
+  box-shadow: none;
+}
+
+.progress-scale highlight,
+.volume-scale highlight {
+  min-height: 2px;
+  border-radius: 1px;
+  background-color: @lyre_lavender;
+  box-shadow: none;
+}
+
+/* Invisible until hovered, then a small round grab dot appears so it's
+   clear where to drag. */
+.progress-scale slider,
+.volume-scale slider {
+  min-width: 6px;
+  min-height: 6px;
+  margin: -2px;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: @lyre_lavender;
+  border: 1px solid @window_bg_color;
+  box-shadow: 0 1px 3px alpha(#000, 0.25);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.progress-scale:hover slider,
+.volume-scale:hover slider,
+.progress-scale slider:active,
+.volume-scale slider:active {
+  opacity: 1;
+}
+
+/* Empty-state call-to-action pill. */
+.empty-cta {
+  background-color: @lyre_lavender;
+  color: #ffffff;
+}
+
+.empty-cta:hover {
+  background-color: shade(@lyre_lavender, 1.08);
+}
+
+/* hover heart on track rows */
+.heart-btn {
+  opacity: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px;
+  color: alpha(@window_fg_color, 0.35);
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.track-row:hover .heart-btn {
+  opacity: 1;
+}
+
+.heart-btn:hover {
+  color: @lyre_gold;
+  background: none;
+}
+
+.heart-btn.faved {
+  opacity: 1;
+  color: @lyre_gold;
+}
+
+/* Up-next row remove button: hidden until the row is hovered. */
+.upnext-remove {
+  opacity: 0;
+  padding: 2px;
+  min-width: 0;
+  min-height: 0;
+  color: alpha(@window_fg_color, 0.4);
+  background: none;
+}
+
+.upnext-row:hover .upnext-remove {
+  opacity: 1;
+}
+
+.upnext-remove:hover {
+  color: @window_fg_color;
+  background: none;
+}
+
+/* ==================== dark theme ====================
+   The window gains the .dark class (mirroring libadwaita's dark state).
+   Surfaces and neutral text adapt on their own through the named system
+   colors above; only the accent shades need swapping — lavender and gold
+   lighten so they read on dark surfaces, and the play button flips to a
+   light-lavender fill with dark glyphs. */
+
+window.dark link,
+window.dark .root-bg link {
+  color: @lyre_lavender_light;
+}
+
+window.dark .tab-btn.tab-active {
+  background-color: alpha(#fff, 0.14);
+  box-shadow: 0 1px 3px alpha(#000, 0.3);
+}
+
+window.dark .search-entry:focus-within {
+  border-color: @lyre_lavender_light;
+}
+
+window.dark .paper {
+  box-shadow: 0 1px 2px alpha(#000, 0.2), 0 12px 32px alpha(#000, 0.35);
+}
+
+window.dark .back-btn:hover {
+  border-color: @lyre_lavender_light;
+}
+
+window.dark .eyebrow,
+window.dark .mono-dim,
+window.dark .mono-dim-sm,
+window.dark .now-artist,
+window.dark .upnext-clear,
+window.dark .swatch-caption {
+  color: @lyre_text_soft_dark;
+}
+
+window.dark .filter-label {
+  color: alpha(@lyre_text_soft_dark, 0.75);
+}
+
+window.dark .time-label {
+  color: alpha(@lyre_text_soft_dark, 0.85);
+}
+
+window.dark .swatch.chip-selected {
+  border-color: @lyre_lavender_light;
+}
+
+window.dark .swatch-caption {
+  background-color: alpha(#000, 0.55);
+}
+
+window.dark .track-index.playing {
+  color: @lyre_lavender_light;
+}
+
+window.dark .track-title.playing {
+  color: @lyre_lavender_light;
+}
+
+window.dark .mini-transport:checked {
+  color: @lyre_lavender_light;
+}
+
+window.dark .play-btn {
+  background-color: @lyre_lavender_light;
+  color: #1c1c1c;
+}
+
+window.dark .play-btn:hover {
+  background-color: shade(@lyre_lavender_light, 1.08);
+}
+
+window.dark .progress-scale highlight,
+window.dark .volume-scale highlight {
+  background-color: @lyre_lavender_light;
+}
+
+window.dark .progress-scale slider,
+window.dark .volume-scale slider {
+  background-color: @lyre_lavender_light;
+}
+
+window.dark .empty-cta {
+  background-color: @lyre_lavender_light;
+  color: #1c1c1c;
+}
+
+window.dark .empty-cta:hover {
+  background-color: shade(@lyre_lavender_light, 1.08);
+}
+
+window.dark .heart-btn:hover,
+window.dark .heart-btn.faved {
+  color: @lyre_gold_light;
+}

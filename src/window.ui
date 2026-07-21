@@ -1,0 +1,879 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.0"/>
+
+  <menu id="primary_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Add Music Folder…</attribute>
+        <attribute name="action">win.add-folder</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">New Playlist…</attribute>
+        <attribute name="action">win.new-playlist</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Rescan Library</attribute>
+        <attribute name="action">win.rescan</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Scan Internet for Metadata</attribute>
+        <attribute name="action">win.fetch-metadata</attribute>
+      </item>
+    </section>
+    <section>
+      <submenu>
+        <attribute name="label" translatable="yes">Sleep Timer</attribute>
+        <item>
+          <attribute name="label" translatable="yes">Off</attribute>
+          <attribute name="action">win.sleep-timer</attribute>
+          <attribute name="target" type="i">0</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">15 minutes</attribute>
+          <attribute name="action">win.sleep-timer</attribute>
+          <attribute name="target" type="i">15</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">30 minutes</attribute>
+          <attribute name="action">win.sleep-timer</attribute>
+          <attribute name="target" type="i">30</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">45 minutes</attribute>
+          <attribute name="action">win.sleep-timer</attribute>
+          <attribute name="target" type="i">45</attribute>
+        </item>
+        <item>
+          <attribute name="label" translatable="yes">60 minutes</attribute>
+          <attribute name="action">win.sleep-timer</attribute>
+          <attribute name="target" type="i">60</attribute>
+        </item>
+      </submenu>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Preferences</attribute>
+        <attribute name="action">win.preferences</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Keyboard Shortcuts</attribute>
+        <attribute name="action">win.show-help-overlay</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">About Lyre</attribute>
+        <attribute name="action">app.about</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Quit</attribute>
+        <attribute name="action">app.quit</attribute>
+      </item>
+    </section>
+  </menu>
+
+  <template class="MusicWindow" parent="AdwApplicationWindow">
+    <property name="default-width">1180</property>
+    <property name="default-height">740</property>
+    <property name="width-request">720</property>
+    <property name="height-request">520</property>
+    <property name="title">Lyre</property>
+    <property name="content">
+      <object class="AdwToastOverlay" id="toast_overlay">
+        <property name="child">
+      <object class="GtkBox" id="root_box">
+        <property name="orientation">vertical</property>
+        <style>
+          <class name="root-bg"/>
+        </style>
+
+        <!-- Row 1 — thin titlebar / drag handle. The volume + menu group is
+             placed on the OPPOSITE side of the window controls at runtime
+             (_apply_titlebar_side reorders children on gtk-decoration-layout
+             changes), so it never crowds the close/min/max buttons. -->
+        <child>
+          <object class="GtkWindowHandle" id="titlebar_handle">
+            <property name="height-request">48</property>
+            <property name="child">
+              <object class="GtkBox" id="titlebar_box">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">6</property>
+                <property name="margin-start">16</property>
+                <property name="margin-end">8</property>
+                <property name="valign">center</property>
+                <child>
+                  <object class="GtkWindowControls" id="wc_start">
+                    <property name="side">start</property>
+                    <property name="valign">center</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkButton" id="volume_btn">
+                    <property name="tooltip-text" translatable="yes">Mute</property>
+                    <property name="valign">center</property>
+                    <property name="icon-name">lyre-volume-high-symbolic</property>
+                    <property name="action-name">win.mute</property>
+                    <style>
+                      <class name="flat"/>
+                      <class name="circular"/>
+                      <class name="titlebar-icon"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkScale" id="volume_scale">
+                    <property name="orientation">horizontal</property>
+                    <property name="draw-value">false</property>
+                    <property name="width-request">108</property>
+                    <property name="valign">center</property>
+                    <property name="tooltip-text" translatable="yes">Volume</property>
+                    <property name="adjustment">
+                      <object class="GtkAdjustment">
+                        <property name="lower">0</property>
+                        <property name="upper">1</property>
+                        <property name="value">0.7</property>
+                        <property name="step-increment">0.05</property>
+                      </object>
+                    </property>
+                    <style>
+                      <class name="volume-scale"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkMenuButton" id="menu_button">
+                    <property name="icon-name">open-menu-symbolic</property>
+                    <property name="tooltip-text" translatable="yes">Main Menu</property>
+                    <property name="valign">center</property>
+                    <property name="menu-model">primary_menu</property>
+                    <style>
+                      <class name="flat"/>
+                      <class name="circular"/>
+                      <class name="titlebar-icon"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkBox" id="titlebar_spacer">
+                    <property name="hexpand">true</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkWindowControls" id="wc_end">
+                    <property name="side">end</property>
+                    <property name="valign">center</property>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </child>
+
+        <!-- Row 2 — navigation band on the grey desktop, aligned to the paper:
+             the view tabs (left) / search entry, with sort + search on the right.
+             Horizontal margins are matched to the paper in _apply_layout_metrics. -->
+        <child>
+          <object class="GtkBox" id="nav_row">
+            <property name="orientation">horizontal</property>
+            <property name="spacing">8</property>
+            <property name="margin-top">24</property>
+            <property name="margin-bottom">18</property>
+            <property name="valign">center</property>
+            <child>
+              <object class="GtkStack" id="middle_stack">
+                <property name="hexpand">true</property>
+                <property name="valign">center</property>
+                <property name="transition-type">crossfade</property>
+                <property name="transition-duration">100</property>
+                <child>
+                  <object class="GtkStackPage">
+                    <property name="name">view</property>
+                    <property name="child">
+                      <object class="GtkBox" id="tabs_box">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">12</property>
+                        <property name="halign">start</property>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <style>
+                              <class name="tab-group"/>
+                            </style>
+                            <child>
+                              <object class="GtkButton" id="tab_artists">
+                                <property name="label" translatable="yes">Artists</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="tab-btn"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="tab_albums">
+                                <property name="label" translatable="yes">Albums</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="tab-btn"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="tab_tracks">
+                                <property name="label" translatable="yes">Tracks</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="tab-btn"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkBox">
+                            <property name="orientation">horizontal</property>
+                            <style>
+                              <class name="tab-group"/>
+                            </style>
+                            <child>
+                              <object class="GtkButton" id="tab_favourites">
+                                <property name="label" translatable="yes">Favourites</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="tab-btn"/>
+                                </style>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkButton" id="tab_playlists">
+                                <property name="label" translatable="yes">Playlists</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="tab-btn"/>
+                                </style>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkStackPage">
+                    <property name="name">search</property>
+                    <property name="child">
+                      <object class="GtkSearchEntry" id="search_entry">
+                        <property name="placeholder-text" translatable="yes">Search</property>
+                        <property name="hexpand">true</property>
+                        <property name="valign">center</property>
+                        <style>
+                          <class name="search-entry"/>
+                        </style>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="GtkMenuButton" id="sort_btn">
+                <property name="icon-name">lyre-sort-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Sort</property>
+                <property name="valign">center</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="circular"/>
+                  <class name="titlebar-icon"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkToggleButton" id="search_toggle_btn">
+                <property name="tooltip-text" translatable="yes">Search</property>
+                <property name="valign">center</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="circular"/>
+                  <class name="titlebar-icon"/>
+                </style>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">system-search-symbolic</property>
+                    <property name="pixel-size">14</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <!-- Content: the paper library card and the floating player panel -->
+        <child>
+          <object class="GtkBox" id="content_row">
+            <property name="orientation">horizontal</property>
+            <property name="hexpand">true</property>
+            <property name="vexpand">true</property>
+
+            <child>
+              <object class="GtkBox" id="paper">
+                <property name="orientation">vertical</property>
+                <property name="hexpand">true</property>
+                <property name="vexpand">true</property>
+                <style>
+                  <class name="paper"/>
+                </style>
+
+                <child>
+                  <object class="GtkCenterBox" id="detail_back_row">
+                    <property name="visible">false</property>
+                    <property name="margin-top">24</property>
+                    <property name="margin-start">32</property>
+                    <property name="margin-end">32</property>
+                    <property name="start-widget">
+                      <object class="GtkButton" id="back_btn">
+                        <style>
+                          <class name="back-btn"/>
+                        </style>
+                        <child>
+                          <object class="AdwButtonContent">
+                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="label" translatable="yes">Back</property>
+                          </object>
+                        </child>
+                      </object>
+                    </property>
+                    <property name="end-widget">
+                      <object class="GtkLabel" id="detail_kind_label">
+                        <property name="label" translatable="yes">Artist</property>
+                        <style>
+                          <class name="eyebrow"/>
+                        </style>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+
+                <child>
+                  <object class="GtkStack" id="paper_stack">
+                    <property name="vexpand">true</property>
+                    <property name="hexpand">true</property>
+                    <property name="transition-type">crossfade</property>
+                    <property name="transition-duration">120</property>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">empty</property>
+                        <property name="child">
+                          <object class="AdwStatusPage">
+                            <property name="icon-name">folder-music-symbolic</property>
+                            <property name="title" translatable="yes">No Music Yet</property>
+                            <property name="description" translatable="yes">Add a folder and Lyre will scan it for music.</property>
+                            <property name="child">
+                              <object class="GtkButton">
+                                <property name="label" translatable="yes">Add Music Folder…</property>
+                                <property name="halign">center</property>
+                                <property name="action-name">win.add-folder</property>
+                                <style>
+                                  <class name="pill"/>
+                                  <class name="empty-cta"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">artists</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkGridView" id="artist_grid">
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">24</property>
+                                <property name="margin-bottom">1</property>
+                                <property name="margin-start">32</property>
+                                <property name="margin-end">32</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">albums</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkGridView" id="album_grid">
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">24</property>
+                                <property name="margin-bottom">1</property>
+                                <property name="margin-start">32</property>
+                                <property name="margin-end">32</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">tracks</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkListView" id="track_list">
+                                <property name="margin-top">16</property>
+                                <property name="margin-bottom">1</property>
+                                <property name="margin-start">32</property>
+                                <property name="margin-end">32</property>
+                                <property name="single-click-activate">true</property>
+                                <style>
+                                  <class name="track-cells"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">favourites</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkListView" id="fav_list">
+                                <property name="margin-top">16</property>
+                                <property name="margin-bottom">1</property>
+                                <property name="margin-start">32</property>
+                                <property name="margin-end">32</property>
+                                <property name="single-click-activate">true</property>
+                                <style>
+                                  <class name="track-cells"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">playlists</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkGridView" id="playlist_grid">
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">24</property>
+                                <property name="margin-bottom">1</property>
+                                <property name="margin-start">32</property>
+                                <property name="margin-end">32</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">detail</property>
+                        <property name="child">
+                          <object class="GtkScrolledWindow">
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkBox" id="detail_box">
+                                <property name="orientation">vertical</property>
+
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">horizontal</property>
+                                    <property name="spacing">24</property>
+                                    <property name="margin-top">24</property>
+                                    <property name="margin-bottom">8</property>
+                                    <property name="margin-start">32</property>
+                                    <property name="margin-end">32</property>
+                                    <child>
+                                      <object class="GtkBox" id="detail_hero_slot"/>
+                                    </child>
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">vertical</property>
+                                        <property name="spacing">6</property>
+                                        <property name="valign">center</property>
+                                        <child>
+                                          <object class="GtkLabel" id="detail_name_label">
+                                            <property name="xalign">0</property>
+                                            <style>
+                                              <class name="artist-heading"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkLabel" id="detail_stats_label">
+                                            <property name="xalign">0</property>
+                                            <style>
+                                              <class name="mono-dim"/>
+                                            </style>
+                                          </object>
+                                        </child>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+
+                                <child>
+                                  <object class="GtkBox" id="detail_albums_section">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">12</property>
+                                    <property name="margin-top">20</property>
+                                    <property name="margin-bottom">4</property>
+                                    <property name="margin-start">32</property>
+                                    <property name="margin-end">32</property>
+                                    <child>
+                                      <object class="GtkLabel">
+                                        <property name="label" translatable="yes">Albums</property>
+                                        <property name="xalign">0</property>
+                                        <style>
+                                          <class name="eyebrow"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkFlowBox" id="detail_albums_box">
+                                        <property name="selection-mode">none</property>
+                                        <property name="homogeneous">false</property>
+                                        <property name="row-spacing">16</property>
+                                        <property name="column-spacing">16</property>
+                                        <property name="halign">fill</property>
+                                        <property name="hexpand">true</property>
+                                        <property name="max-children-per-line">12</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+
+                                <child>
+                                  <object class="GtkBox">
+                                    <property name="orientation">vertical</property>
+                                    <property name="margin-top">20</property>
+                                    <property name="margin-bottom">1</property>
+                                    <property name="margin-start">32</property>
+                                    <property name="margin-end">32</property>
+                                    <child>
+                                      <object class="GtkCenterBox">
+                                        <property name="margin-bottom">10</property>
+                                        <property name="start-widget">
+                                          <object class="GtkLabel">
+                                            <property name="label" translatable="yes">Tracks</property>
+                                            <property name="xalign">0</property>
+                                            <style>
+                                              <class name="eyebrow"/>
+                                            </style>
+                                          </object>
+                                        </property>
+                                        <property name="end-widget">
+                                          <object class="GtkLabel" id="detail_filter_label">
+                                            <property name="label">All</property>
+                                            <style>
+                                              <class name="filter-label"/>
+                                            </style>
+                                          </object>
+                                        </property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkBox" id="detail_tracks_box">
+                                        <property name="orientation">vertical</property>
+                                        <style>
+                                          <class name="track-list-top-rule"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </child>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+            <!-- Player panel: floats on the grey background, revealed only while playing -->
+            <child>
+              <object class="GtkRevealer" id="player_revealer">
+                <property name="hexpand">false</property>
+                <property name="transition-type">slide-left</property>
+                <property name="transition-duration">450</property>
+                <property name="valign">fill</property>
+                <property name="child">
+                  <object class="GtkBox" id="player_panel">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">20</property>
+                    <property name="vexpand">true</property>
+                    <style>
+                      <class name="player-panel"/>
+                    </style>
+
+                    <child>
+                      <object class="GtkBox" id="player_art_slot">
+                        <property name="hexpand">true</property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">4</property>
+                        <property name="halign">center</property>
+                        <child>
+                          <object class="GtkLabel" id="now_title">
+                            <property name="justify">center</property>
+                            <property name="wrap">true</property>
+                            <property name="lines">2</property>
+                            <property name="ellipsize">end</property>
+                            <property name="max-width-chars">22</property>
+                            <property name="width-chars">0</property>
+                            <style>
+                              <class name="now-title"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="now_artist">
+                            <property name="ellipsize">end</property>
+                            <property name="max-width-chars">28</property>
+                            <property name="width-chars">0</property>
+                            <style>
+                              <class name="now-artist"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">6</property>
+                        <child>
+                          <object class="GtkScale" id="seek_scale">
+                            <property name="orientation">horizontal</property>
+                            <property name="draw-value">false</property>
+                            <style>
+                              <class name="progress-scale"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkCenterBox">
+                            <property name="start-widget">
+                              <object class="GtkLabel" id="elapsed_label">
+                                <property name="label">0:00</property>
+                                <style>
+                                  <class name="time-label"/>
+                                </style>
+                              </object>
+                            </property>
+                            <property name="end-widget">
+                              <object class="GtkLabel" id="duration_label">
+                                <property name="label">0:00</property>
+                                <style>
+                                  <class name="time-label"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="halign">center</property>
+                        <property name="spacing">18</property>
+                        <child>
+                          <object class="GtkToggleButton" id="shuffle_btn">
+                            <property name="tooltip-text" translatable="yes">Shuffle</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="mini-transport"/>
+                            </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">lyre-shuffle-symbolic</property>
+                                <property name="pixel-size">14</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="prev_btn">
+                            <style>
+                              <class name="flat"/>
+                              <class name="transport-btn"/>
+                            </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">lyre-seek-backward-symbolic</property>
+                                <property name="pixel-size">18</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="play_btn">
+                            <style>
+                              <class name="flat"/>
+                              <class name="play-btn"/>
+                            </style>
+                            <child>
+                              <object class="GtkImage" id="play_icon">
+                                <property name="icon-name">lyre-play-symbolic</property>
+                                <property name="pixel-size">18</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="next_btn">
+                            <style>
+                              <class name="flat"/>
+                              <class name="transport-btn"/>
+                            </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">lyre-seek-forward-symbolic</property>
+                                <property name="pixel-size">18</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkToggleButton" id="repeat_btn">
+                            <property name="tooltip-text" translatable="yes">Repeat</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="mini-transport"/>
+                            </style>
+                            <child>
+                              <object class="GtkImage">
+                                <property name="icon-name">lyre-repeat-symbolic</property>
+                                <property name="pixel-size">14</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">10</property>
+                        <property name="vexpand">true</property>
+                        <child>
+                          <object class="GtkCenterBox" id="upnext_header">
+                            <property name="visible">false</property>
+                            <property name="start-widget">
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Up Next</property>
+                                <property name="xalign">0</property>
+                                <style>
+                                  <class name="eyebrow"/>
+                                </style>
+                              </object>
+                            </property>
+                            <property name="end-widget">
+                              <object class="GtkButton" id="upnext_clear_btn">
+                                <property name="label" translatable="yes">Clear</property>
+                                <property name="tooltip-text" translatable="yes">Clear the queue</property>
+                                <style>
+                                  <class name="flat"/>
+                                  <class name="upnext-clear"/>
+                                </style>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkScrolledWindow">
+                            <property name="vexpand">true</property>
+                            <property name="hscrollbar-policy">never</property>
+                            <style>
+                              <class name="om-scroll"/>
+                            </style>
+                            <property name="child">
+                              <object class="GtkBox" id="upnext_box">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">2</property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+        </property>
+      </object>
+    </property>
+  </template>
+</interface>

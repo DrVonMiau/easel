@@ -1,0 +1,65 @@
+name: Flatpak repository (GitHub Pages)
+
+# Builds a hosted Flatpak repository and publishes it to GitHub Pages, so users
+# can add it once as a remote and then get AUTOMATIC UPDATES like any store app.
+#
+# This is scaffolded but MANUAL-ONLY for now (workflow_dispatch). To turn it on:
+#
+#   1. Repo Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+#   2. (Recommended) Sign the repo so users don't need --no-gpg-verify:
+#        - generate a key:   gpg --quick-gen-key "Lyre <you@example.com>"
+#        - export public:    gpg --armor --export <KEYID> > key.gpg   (ship this)
+#        - export private:   gpg --armor --export-secret-keys <KEYID>
+#        - add two repo secrets: FLATPAK_GPG_KEY (the private-key armor) and
+#          FLATPAK_GPG_KEYID (the key id), then uncomment the signing lines below.
+#   3. Change the trigger from `workflow_dispatch:` to also run on push to main.
+#
+# See docs/DISTRIBUTION.md for the full walkthrough.
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: flatpak-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build repository
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # Uncomment to import the signing key (needs the secrets from step 2 above):
+      # - name: Import GPG key
+      #   run: echo "${{ secrets.FLATPAK_GPG_KEY }}" | gpg --import
+
+      - name: Build and stage repo
+        uses: andyholmes/flatter@main
+        with:
+          files: io.github.drvonmiau.Lyre.json
+          upload-pages-artifact: true
+          # gpg-sign: ${{ secrets.FLATPAK_GPG_KEYID }}
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

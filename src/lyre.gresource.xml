@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/drvonmiau/Lyre">
+    <file preprocess="xml-stripblanks">window.ui</file>
+    <file preprocess="xml-stripblanks">gtk/help-overlay.ui</file>
+    <file compressed="true">style.css</file>
+    <file>icons/scalable/actions/lyre-pause-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-play-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-repeat-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-seek-backward-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-seek-forward-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-more-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-shuffle-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-sort-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-volume-high-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-volume-low-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-volume-medium-symbolic.svg</file>
+    <file>icons/scalable/actions/lyre-volume-muted-symbolic.svg</file>
+  </gresource>
+</gresources>
