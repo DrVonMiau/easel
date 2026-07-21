@@ -42,6 +42,12 @@ def connect():
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(SCHEMA)
+    # One-off cleanup for libraries scanned before hidden files were skipped:
+    # drop any indexed dotfile / AppleDouble sidecar (a "/." anywhere in the
+    # path means a hidden path component). Cascades to album_photos.
+    con.execute("DELETE FROM photos WHERE path LIKE '%/.%'")
+    con.commit()
+    prune_orphans(con)
     return con
 
 
@@ -156,13 +162,19 @@ def _maybe_cover(con, album_id):
         con.commit()
 
 
+def _is_hidden(name):
+    # Skip dotfiles, including macOS AppleDouble sidecars (._Foo.jpg) that
+    # carry an image extension but aren't real images.
+    return name.startswith(".")
+
+
 def scan_folder(con, folder, progress_cb=None):
-    files = [
-        os.path.join(r, f)
-        for r, _d, fs in os.walk(folder)
-        for f in fs
-        if Path(f).suffix.lower() in IMAGE_EXT
-    ]
+    files = []
+    for root, dirs, fs in os.walk(folder):
+        dirs[:] = [d for d in dirs if not _is_hidden(d)]  # don't descend hidden dirs
+        for f in fs:
+            if not _is_hidden(f) and Path(f).suffix.lower() in IMAGE_EXT:
+                files.append(os.path.join(root, f))
     for i, path in enumerate(files):
         scan_file(con, path)
         if progress_cb:
