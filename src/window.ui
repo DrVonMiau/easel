@@ -170,8 +170,8 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkButton" id="tab_days">
-                                <property name="label" translatable="yes">Days</property>
+                              <object class="GtkButton" id="tab_years">
+                                <property name="label" translatable="yes">Years</property>
                                 <style>
                                   <class name="flat"/>
                                   <class name="tab-btn"/>
@@ -407,7 +407,7 @@
 
                     <child>
                       <object class="GtkStackPage">
-                        <property name="name">days</property>
+                        <property name="name">years</property>
                         <property name="child">
                           <object class="GtkScrolledWindow">
                             <property name="hscrollbar-policy">never</property>
@@ -415,7 +415,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkBox" id="days_box">
+                              <object class="GtkBox" id="years_box">
                                 <property name="orientation">vertical</property>
                                 <property name="spacing">28</property>
                                 <property name="margin-top">24</property>

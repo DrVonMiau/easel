@@ -20,7 +20,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Photo
-from .widgets import Swatch, load_thumbnail
+from .widgets import Swatch, load_full_texture, load_thumbnail
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -47,7 +47,7 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-VIEW_NAMES = ("all_photos", "months", "days", "albums", "favourites", "maps", "people")
+VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites", "maps", "people")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -108,7 +108,7 @@ class EaselWindow(Adw.ApplicationWindow):
     middle_stack = Gtk.Template.Child()
     tab_all_photos = Gtk.Template.Child()
     tab_months = Gtk.Template.Child()
-    tab_days = Gtk.Template.Child()
+    tab_years = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
     tab_favourites = Gtk.Template.Child()
     tab_maps = Gtk.Template.Child()
@@ -118,7 +118,7 @@ class EaselWindow(Adw.ApplicationWindow):
     paper_stack = Gtk.Template.Child()
     photo_grid = Gtk.Template.Child()
     months_box = Gtk.Template.Child()
-    days_box = Gtk.Template.Child()
+    years_box = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
     fav_grid = Gtk.Template.Child()
 
@@ -179,7 +179,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._tab_buttons = {
             "all_photos": self.tab_all_photos,
             "months": self.tab_months,
-            "days": self.tab_days,
+            "years": self.tab_years,
             "albums": self.tab_albums,
             "favourites": self.tab_favourites,
             "maps": self.tab_maps,
@@ -318,8 +318,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self._apply_filters()
         if self.view == "months":
             self._render_months()
-        elif self.view == "days":
-            self._render_days()
+        elif self.view == "years":
+            self._render_years()
         elif self.view == "detail":
             self._render_detail()
 
@@ -669,8 +669,8 @@ class EaselWindow(Adw.ApplicationWindow):
     def _render_months(self):
         self._render_grouped(self.months_box, "%Y-%m", "%B %Y")
 
-    def _render_days(self):
-        self._render_grouped(self.days_box, "%Y-%m-%d", "%A, %-d %B %Y")
+    def _render_years(self):
+        self._render_grouped(self.years_box, "%Y", "%Y")
 
     def _render_grouped(self, container, key_fmt, label_fmt):
         self._clear_box(container)
@@ -1011,11 +1011,12 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _show_lightbox_photo(self):
         photo = self._lightbox_photos[self._lightbox_index]
-        # Full resolution here (one image at a time) — this is the detail view.
-        try:
-            self.lightbox_picture.set_filename(photo.path or None)
-        except Exception:
-            self.lightbox_picture.set_paintable(None)
+        # Full resolution here (one image at a time). Load the texture ourselves
+        # and only ever hand GtkPicture a valid paintable or a clean None —
+        # set_filename() leaves the widget in a broken state (a non-null content
+        # with a null paintable) when a file can't be decoded, which then trips
+        # gtk_scaler_new assertions on every redraw and takes the app down.
+        self.lightbox_picture.set_paintable(load_full_texture(photo.path))
         name = os.path.basename(photo.path) if photo.path else ""
         date = _fmt_date(photo.date_taken)
         pos = f"{self._lightbox_index + 1} / {len(self._lightbox_photos)}"
@@ -1246,14 +1247,14 @@ class EaselWindow(Adw.ApplicationWindow):
     def _select_tab(self, name):
         self.view = name
         self._last_tab = name
-        if not self._photos_all and name in ("all_photos", "months", "days", "favourites"):
+        if not self._photos_all and name in ("all_photos", "months", "years", "favourites"):
             self.paper_stack.set_visible_child_name("empty")
         else:
             self.paper_stack.set_visible_child_name(name)
             if name == "months":
                 self._render_months()
-            elif name == "days":
-                self._render_days()
+            elif name == "years":
+                self._render_years()
         self.detail_back_row.set_visible(False)
         self._update_sort_button()
         for key, btn in self._tab_buttons.items():

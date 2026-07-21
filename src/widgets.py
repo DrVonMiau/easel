@@ -9,7 +9,7 @@ import math
 import os
 from collections import OrderedDict
 
-from gi.repository import Gdk, GdkPixbuf, Graphene, Gsk, Gtk
+from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gsk, Gtk
 
 STRIPE_STEP = 7
 STRIPE_WIDTH = 2.4
@@ -26,10 +26,42 @@ _THUMB_CACHE_MAX = 512
 _THUMB_MAX_DIM = 640
 
 
+def _texture_from_pixbuf(pixbuf):
+    """A Gdk.MemoryTexture copied from a pixbuf's pixels. We copy the bytes so
+    the texture owns its data (no dependence on the pixbuf's lifetime), and we
+    avoid the deprecated Gdk.Texture.new_for_pixbuf path."""
+    if not pixbuf.get_has_alpha():
+        pixbuf = pixbuf.add_alpha(False, 0, 0, 0)
+    data = GLib.Bytes.new(pixbuf.get_pixels())
+    return Gdk.MemoryTexture.new(
+        pixbuf.get_width(), pixbuf.get_height(),
+        Gdk.MemoryFormat.R8G8B8A8, data, pixbuf.get_rowstride())
+
+
+def load_full_texture(path):
+    """A full-resolution Gdk.Texture for `path` (the lightbox), or None if it
+    can't be loaded. Tries GTK's own loaders first (they cover PNG/JPEG without
+    needing gdk-pixbuf loader modules), then falls back to gdk-pixbuf."""
+    if not path:
+        return None
+    try:
+        return Gdk.Texture.new_from_filename(path)
+    except Exception:
+        pass
+    try:
+        return _texture_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file(path))
+    except Exception:
+        return None
+
+
 def load_thumbnail(path, size):
     """A Gdk.Texture holding `path` decoded down to roughly `size` px, or None
-    if the file is missing or its format can't be decoded (HEIC without a
-    loader, corrupt file, …) — callers then show the striped placeholder."""
+    if the file can't be loaded (missing, corrupt, or a format with no loader
+    such as HEIC) — callers then show the striped placeholder.
+
+    Scaled decoding keeps memory bounded (a full 12MP photo is ~48 MB decoded);
+    if the scaling loader is unavailable we fall back to a full-size texture so
+    the image still shows rather than vanishing."""
     if not path:
         return None
     try:
@@ -42,10 +74,13 @@ def load_thumbnail(path, size):
         _THUMB_CACHE.move_to_end(key)
         return cached
     dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
+    texture = None
     try:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
-        texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+        texture = _texture_from_pixbuf(pixbuf)
     except Exception:
+        texture = load_full_texture(path)
+    if texture is None:
         return None
     _THUMB_CACHE[key] = texture
     if len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
@@ -150,9 +185,10 @@ class Swatch(Gtk.Widget):
         # so unsupported formats show a placeholder instead of a blank tile.
         texture = load_thumbnail(path, self._size)
         has_image = texture is not None
+        # Always set the paintable (None clears it cleanly) so a recycled
+        # swatch never briefly shows the previous photo or keeps stale content.
+        self._picture.set_paintable(texture)
         self._picture.set_visible(has_image)
-        if has_image:
-            self._picture.set_paintable(texture)
         self._area.set_visible(not has_image)
         self._label.set_visible(not has_image and bool(self._placeholder_text))
         self.queue_allocate()
