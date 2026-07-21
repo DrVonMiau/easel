@@ -20,7 +20,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Photo
-from .widgets import Swatch
+from .widgets import Swatch, load_thumbnail
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -912,7 +912,7 @@ class EaselWindow(Adw.ApplicationWindow):
             self._info_preview.add_css_class("info-preview")
             self._info_preview.set_size_request(-1, 220)
             self.info_preview_slot.append(self._info_preview)
-        self._info_preview.set_filename(row["path"])
+        self._info_preview.set_paintable(load_thumbnail(row["path"], 480))
         self.info_title.set_label(os.path.basename(row["path"]))
 
         self._clear_box(self.info_rows_box)
@@ -1011,7 +1011,11 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _show_lightbox_photo(self):
         photo = self._lightbox_photos[self._lightbox_index]
-        self.lightbox_picture.set_filename(photo.path or None)
+        # Full resolution here (one image at a time) — this is the detail view.
+        try:
+            self.lightbox_picture.set_filename(photo.path or None)
+        except Exception:
+            self.lightbox_picture.set_paintable(None)
         name = os.path.basename(photo.path) if photo.path else ""
         date = _fmt_date(photo.date_taken)
         pos = f"{self._lightbox_index + 1} / {len(self._lightbox_photos)}"

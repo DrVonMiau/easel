@@ -1,16 +1,56 @@
-"""Small reusable widgets: the striped placeholder art swatch used for
-artists/albums/tracks until real cover art or an artist photo is fetched.
+"""Small reusable widgets: the striped placeholder swatch used for photo
+thumbnails and album covers, and a scaled-thumbnail loader.
 
 The stripes are drawn with GTK4's native Gtk.Snapshot/GSK API rather than
 Cairo, so this doesn't pull in a pycairo dependency that may not be present
 in the Flatpak runtime.
 """
 import math
+import os
+from collections import OrderedDict
 
-from gi.repository import Graphene, Gsk, Gtk
+from gi.repository import Gdk, GdkPixbuf, Graphene, Gsk, Gtk
 
 STRIPE_STEP = 7
 STRIPE_WIDTH = 2.4
+
+# Loading a photo grid means many thumbnails at once. Decoding each file at
+# full resolution into a Gtk.Picture would blow through memory (a single 12MP
+# photo is ~48 MB decoded) and stall the UI, so thumbnails are decoded to a
+# small bounded size and cached. Keyed by (path, size, mtime) so edits and
+# size changes reload; the cache is an LRU capped at _THUMB_CACHE_MAX entries.
+_THUMB_CACHE = OrderedDict()
+_THUMB_CACHE_MAX = 512
+# Cap the decoded dimension regardless of requested swatch size (retina
+# headroom without unbounded memory).
+_THUMB_MAX_DIM = 640
+
+
+def load_thumbnail(path, size):
+    """A Gdk.Texture holding `path` decoded down to roughly `size` px, or None
+    if the file is missing or its format can't be decoded (HEIC without a
+    loader, corrupt file, …) — callers then show the striped placeholder."""
+    if not path:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    key = (path, size, mtime)
+    cached = _THUMB_CACHE.get(key)
+    if cached is not None:
+        _THUMB_CACHE.move_to_end(key)
+        return cached
+    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
+    try:
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
+        texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+    except Exception:
+        return None
+    _THUMB_CACHE[key] = texture
+    if len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
+        _THUMB_CACHE.popitem(last=False)
+    return texture
 
 
 class _StripeArea(Gtk.Widget):
@@ -105,10 +145,14 @@ class Swatch(Gtk.Widget):
         self._label.set_label(text or "")
 
     def set_path(self, path):
-        has_path = bool(path)
-        self._picture.set_visible(has_path)
-        if has_path:
-            self._picture.set_filename(path)
-        self._area.set_visible(not has_path)
-        self._label.set_visible(not has_path and bool(self._placeholder_text))
+        # Decode a small thumbnail (not the full-resolution image) and fall
+        # back to the striped placeholder when the file can't be read/decoded,
+        # so unsupported formats show a placeholder instead of a blank tile.
+        texture = load_thumbnail(path, self._size)
+        has_image = texture is not None
+        self._picture.set_visible(has_image)
+        if has_image:
+            self._picture.set_paintable(texture)
+        self._area.set_visible(not has_image)
+        self._label.set_visible(not has_image and bool(self._placeholder_text))
         self.queue_allocate()
