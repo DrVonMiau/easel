@@ -1,9 +1,9 @@
 pkgdatadir = get_option('prefix') / get_option('datadir') / meson.project_name()
-moduledir = pkgdatadir / 'lyre'
+moduledir = pkgdatadir / 'easel'
 gnome = import('gnome')
 
-gnome.compile_resources('lyre',
-  'lyre.gresource.xml',
+gnome.compile_resources('easel',
+  'easel.gresource.xml',
   gresource_bundle: true,
   install: true,
   install_dir: pkgdatadir,
@@ -18,24 +18,21 @@ conf.set('localedir', get_option('prefix') / get_option('localedir'))
 conf.set('pkgdatadir', pkgdatadir)
 
 configure_file(
-  input: 'lyre.in',
-  output: 'lyre',
+  input: 'easel.in',
+  output: 'easel',
   configuration: conf,
   install: true,
   install_dir: get_option('bindir'),
   install_mode: 'r-xr-xr-x'
 )
 
-lyre_sources = [
+easel_sources = [
   '__init__.py',
   'main.py',
   'window.py',
   'library.py',
-  'metadata.py',
   'models.py',
-  'mpris.py',
-  'player.py',
   'widgets.py',
 ]
 
-install_data(lyre_sources, install_dir: moduledir)
+install_data(easel_sources, install_dir: moduledir)

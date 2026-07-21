@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="easel">
+	<schema id="io.github.drvonmiau.Easel" path="/io/github/drvonmiau/Easel/">
+		<key name="theme" type="s">
+			<choices>
+				<choice value="light"/>
+				<choice value="dark"/>
+				<choice value="system"/>
+			</choices>
+			<default>'system'</default>
+			<summary>Color theme</summary>
+			<description>Whether to use the light theme, the dark theme, or follow the system preference.</description>
+		</key>
+		<key name="window-width" type="i">
+			<default>1180</default>
+			<summary>Window width</summary>
+		</key>
+		<key name="window-height" type="i">
+			<default>740</default>
+			<summary>Window height</summary>
+		</key>
+		<key name="window-maximized" type="b">
+			<default>false</default>
+			<summary>Window maximized</summary>
+		</key>
+		<key name="last-tab" type="s">
+			<default>'all_photos'</default>
+			<summary>Last active library tab</summary>
+		</key>
+		<key name="thumb-size" type="i">
+			<range min="110" max="320"/>
+			<default>168</default>
+			<summary>Thumbnail size</summary>
+			<description>Pixel size of the photo thumbnails in the grids.</description>
+		</key>
+		<key name="watch-folders" type="b">
+			<default>false</default>
+			<summary>Watch photo folders</summary>
+			<description>Automatically rescan the library when files change in the photo folders.</description>
+		</key>
+		<key name="sort-photos" type="s">
+			<default>'date'</default>
+			<summary>Photos/Favourites sort order</summary>
+		</key>
+		<key name="sort-albums" type="s">
+			<default>'name'</default>
+			<summary>Albums tab sort order</summary>
+		</key>
+	</schema>
+</schemalist>

@@ -17,7 +17,7 @@ class _StripeArea(Gtk.Widget):
     """Fills its allocated area with a 45-degree repeating stripe pattern.
     The stripe color is the widget's CSS `color`, so it follows the theme."""
 
-    __gtype_name__ = "LyreStripeArea"
+    __gtype_name__ = "EaselStripeArea"
 
     def do_snapshot(self, snapshot):
         width = self.get_width()
@@ -48,7 +48,7 @@ class Swatch(Gtk.Widget):
     picture crops via content-fit cover and is clipped to the corners).
     """
 
-    __gtype_name__ = "LyreSwatch"
+    __gtype_name__ = "EaselSwatch"
 
     def __init__(self, placeholder_text, size=128):
         super().__init__()

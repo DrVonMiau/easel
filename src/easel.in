@@ -1,6 +1,6 @@
 #!@PYTHON@
 
-# lyre.in
+# easel.in
 #
 # Copyright 2026 Daniel
 #
@@ -31,16 +31,16 @@ localedir = '@localedir@'
 
 sys.path.insert(1, pkgdatadir)
 signal.signal(signal.SIGINT, signal.SIG_DFL)
-locale.bindtextdomain('lyre', localedir)
-locale.textdomain('lyre')
-gettext.install('lyre', localedir)
+locale.bindtextdomain('easel', localedir)
+locale.textdomain('easel')
+gettext.install('easel', localedir)
 
 if __name__ == '__main__':
     import gi
 
     from gi.repository import Gio
-    resource = Gio.Resource.load(os.path.join(pkgdatadir, 'lyre.gresource'))
+    resource = Gio.Resource.load(os.path.join(pkgdatadir, 'easel.gresource'))
     resource._register()
 
-    from lyre import main
+    from easel import main
     sys.exit(main.main(VERSION))

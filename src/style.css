@@ -1,22 +1,22 @@
-/* Lyre — system palette with lavender & gold accents.
+/* Easel — system palette with blue & gold accents.
    Surfaces and primary text come from libadwaita's named colors
    (@window_bg_color, @card_bg_color, @window_fg_color, …) so both themes
    track the system Adwaita palette; colour is reserved for accents:
-   lavender for interactive elements (buttons, sliders, links, the playing
-   marker) and gold for favourites. Secondary text is a lavender tint —
-   darker on the light theme, lighter on the dark one.
+   blue for interactive elements (buttons, sliders, links, selection) and
+   gold for favourites. Secondary text is a blue tint — darker on the light
+   theme, lighter on the dark one.
    IBM Plex Sans/Mono are bundled by the Flatpak manifest; the generic
    fallbacks only matter for non-Flatpak development runs. */
 
 /* Interactive accent */
-@define-color lyre_lavender #8a70bd;
-@define-color lyre_lavender_light #b6a3d8;
+@define-color easel_blue #4f6ad9;
+@define-color easel_blue_light #8fa2ec;
 /* Favourites */
-@define-color lyre_gold #c1962b;
-@define-color lyre_gold_light #ddb964;
+@define-color easel_gold #c1962b;
+@define-color easel_gold_light #ddb964;
 /* Secondary text */
-@define-color lyre_text_soft #7a6a9e;
-@define-color lyre_text_soft_dark #b3a3d4;
+@define-color easel_text_soft #5a6a9e;
+@define-color easel_text_soft_dark #a7b2da;
 
 /* The desktop behind the paper card: derived from the system window
    colour, shaded a touch on light so the white card still reads. */
@@ -31,24 +31,22 @@ window.dark .root-bg {
 
 link,
 .root-bg link {
-  color: @lyre_lavender;
+  color: @easel_blue;
 }
 
-/* System switches and checks pick up the lavender accent instead of the
-   stock Adwaita blue. A single shade serves both themes (as Adwaita's own
-   accent blue does) because the preferences dialog is a separate window
-   the .dark scoping below can't reach. */
+/* System switches and checks pick up the blue accent instead of the stock
+   Adwaita blue. A single shade serves both themes because the preferences
+   dialog is a separate window the .dark scoping below can't reach. */
 switch:checked {
-  background-color: @lyre_lavender;
+  background-color: @easel_blue;
 }
 
 checkbutton check:checked,
 checkbutton radio:checked {
-  background-color: @lyre_lavender;
+  background-color: @easel_blue;
 }
 
 /* ---------- custom titlebar ---------- */
-
 
 .titlebar-icon {
   min-width: 26px;
@@ -65,8 +63,8 @@ checkbutton radio:checked {
 
 /* ---------- titlebar: tabs + search ---------- */
 
-/* Segmented pill groups: the library tabs and the curated tabs each sit in
-   a soft rounded container; the active tab is a raised pill inside it. */
+/* Segmented pill groups: the library tabs each sit in a soft rounded
+   container; the active tab is a raised pill inside it. */
 .tab-group {
   background-color: alpha(@window_fg_color, 0.06);
   border-radius: 12px;
@@ -116,7 +114,7 @@ checkbutton radio:checked {
 }
 
 .search-entry:focus-within {
-  border-color: @lyre_lavender;
+  border-color: @easel_blue;
 }
 
 /* ---------- paper card ---------- */
@@ -139,7 +137,7 @@ checkbutton radio:checked {
 }
 
 .back-btn:hover {
-  border-color: @lyre_lavender;
+  border-color: @easel_blue;
   color: @window_fg_color;
 }
 
@@ -147,25 +145,19 @@ checkbutton radio:checked {
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   letter-spacing: 0.14em;
-  color: @lyre_text_soft;
-}
-
-.filter-label {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  color: alpha(@lyre_text_soft, 0.75);
+  color: @easel_text_soft;
 }
 
 .mono-dim {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
-  color: @lyre_text_soft;
+  color: @easel_text_soft;
 }
 
 .mono-dim-sm {
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
-  color: @lyre_text_soft;
+  color: @easel_text_soft;
 }
 
 /* ---------- artwork swatches ---------- */
@@ -183,9 +175,7 @@ checkbutton radio:checked {
   transition: transform 160ms ease, box-shadow 160ms ease;
 }
 
-/* Hovering a card lifts its artwork: a small scale + a deeper shadow.
-   The translate keeps the ~192px swatch's scale centred (GTK transforms
-   from the top-left, and translate needs px units — not percentages). */
+/* Hovering a card lifts its artwork: a small scale + a deeper shadow. */
 .card-box:hover .card-swatch {
   transform: translate(-2px, -2px) scale(1.02);
   box-shadow: 0 10px 26px alpha(#000, 0.22), 0 3px 8px alpha(#000, 0.12);
@@ -196,30 +186,37 @@ checkbutton radio:checked {
   min-width: 24px;
   min-height: 24px;
   padding: 0;
-  color: alpha(@window_fg_color, 0.5);
-  background: none;
+  color: #ffffff;
+  background-color: alpha(#000, 0.4);
+  border-radius: 9999px;
 }
 
 .card-menu-btn:hover {
-  color: @window_fg_color;
-  background-color: alpha(@window_fg_color, 0.07);
+  color: #ffffff;
+  background-color: alpha(#000, 0.6);
+}
+
+/* Gold favourite badge on photo thumbnails. */
+.photo-star {
+  color: @easel_gold;
+  -gtk-icon-shadow: 0 1px 2px alpha(#000, 0.6);
 }
 
 .swatch.chip-selected {
-  border: 2px solid @lyre_lavender;
+  border: 2px solid @easel_blue;
 }
 
 .swatch-caption {
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
-  color: @lyre_text_soft;
+  color: @easel_text_soft;
   background-color: alpha(@window_bg_color, 0.8);
   border-radius: 4px;
   padding: 3px 8px;
 }
 
-/* ---------- artists / albums grids ---------- */
+/* ---------- photo / album grids ---------- */
 
 .card-title {
   font-family: "IBM Plex Sans", sans-serif;
@@ -242,7 +239,7 @@ gridview.card-grid > child:focus {
   box-shadow: none;
 }
 
-/* ---------- artist detail ---------- */
+/* ---------- album detail ---------- */
 
 .artist-heading {
   font-family: "IBM Plex Sans", sans-serif;
@@ -252,199 +249,152 @@ gridview.card-grid > child:focus {
   letter-spacing: -0.01em;
 }
 
-.chip-label {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 11.5px;
-  color: alpha(@window_fg_color, 0.8);
+/* ---------- lightbox ---------- */
+
+.lightbox {
+  background-color: alpha(#000, 0.92);
 }
 
-/* ---------- track rows (library + detail) ---------- */
-
-.track-row {
-  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
-  /* breathing room between the last text line and the divider */
-  padding-top: 3px;
-  padding-bottom: 10px;
-}
-
-.track-row:hover {
-  background-color: alpha(@window_fg_color, 0.04);
-}
-
-.track-list-top-rule {
-  border-top: 1px solid alpha(@window_fg_color, 0.1);
-}
-
-.track-index {
+.lightbox-caption {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  color: alpha(@window_fg_color, 0.35);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: alpha(#ffffff, 0.7);
 }
 
-.track-index.playing {
-  color: @lyre_lavender;
-}
-
-.track-title {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 13.5px;
-  font-weight: 500;
-  color: @window_fg_color;
-}
-
-.track-title.playing {
-  font-weight: 600;
-  color: @lyre_lavender;
-}
-
-listview > row,
-listview > row:hover,
-listview > row:selected,
-listview > row:focus {
-  background: none;
-  box-shadow: none;
-}
-
-/* Tracks / Favourites tabs: rows sit directly on the paper with a light
-   divider line between them. */
-
-listview.track-cells {
-  background: none;
-}
-
-.track-cells .track-row {
-  background: none;
-  border-radius: 0;
-  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
-  padding: 3px 8px 10px 8px;
-}
-
-.track-cells .track-row:hover {
-  background-color: alpha(@window_fg_color, 0.04);
-}
-
-/* ---------- player panel ---------- */
-
-.player-panel {
-  background: none;
-}
-
-.upnext-row {
-  padding: 6px 4px;
-  border-radius: 7px;
-}
-
-.upnext-row:hover {
-  background-color: alpha(@window_fg_color, 0.05);
-}
-
-.upnext-title {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 13.5px;
-  font-weight: 500;
-  color: @window_fg_color;
-}
-
-.now-title {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 18px;
-  font-weight: 600;
-  color: @window_fg_color;
-}
-
-.now-artist {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  color: @lyre_text_soft;
-}
-
-.time-label {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10.5px;
-  color: alpha(@lyre_text_soft, 0.85);
-}
-
-.transport-btn {
-  color: alpha(@window_fg_color, 0.65);
-  font-size: 18px;
+.lightbox-btn {
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: 9999px;
   padding: 0;
-  min-width: 0;
-  min-height: 0;
-  background: none;
-  border: none;
-  box-shadow: none;
-}
-
-.transport-btn:hover {
-  color: @window_fg_color;
-}
-
-.mini-transport {
-  color: alpha(@window_fg_color, 0.4);
-  padding: 2px;
-  min-width: 0;
-  min-height: 0;
-  background: none;
-  border: none;
-  box-shadow: none;
-}
-
-.mini-transport:hover {
-  color: @window_fg_color;
+  color: alpha(#ffffff, 0.8);
   background: none;
 }
 
-.mini-transport:checked {
-  color: @lyre_lavender;
-  background: none;
+.lightbox-btn:hover {
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.12);
 }
 
-.upnext-clear {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: @lyre_text_soft;
-  padding: 2px 8px;
-  min-height: 0;
-  border-radius: 7px;
+.lightbox-btn.faved {
+  color: @easel_gold_light;
 }
 
-.upnext-clear:hover {
-  color: @window_fg_color;
-  background-color: alpha(@window_fg_color, 0.05);
-}
-
-.play-btn {
+.lightbox-nav {
   min-width: 44px;
   min-height: 44px;
   border-radius: 9999px;
-  background-color: @lyre_lavender;
-  color: #ffffff;
-  font-size: 16px;
   padding: 0;
-  box-shadow: none;
+  color: alpha(#ffffff, 0.75);
+  background-color: alpha(#ffffff, 0.08);
 }
 
-.play-btn:hover {
-  background-color: shade(@lyre_lavender, 1.08);
+.lightbox-nav:hover {
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.18);
 }
 
-/* Flatten GtkScale into a thin progress/volume bar with no visible handle,
-   matching the mockup's simple filled-track look, while staying draggable.
-   GTK quirk: the visible trough height follows the hidden grab dot's box,
-   so the dot's min-size is kept tiny (6px, -2px margins) — negative
-   margins alone can't thin the bar. */
+/* Hover-reveal favourite heart on photo tiles. */
+.tile-heart {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: #ffffff;
+  background-color: alpha(#000, 0.4);
+  border-radius: 9999px;
+}
 
-.progress-scale,
-.volume-scale {
+.tile-heart:hover {
+  color: @easel_gold_light;
+  background-color: alpha(#000, 0.6);
+}
+
+/* Flat three-dot menu button on album cards (text row, not over artwork). */
+.card-menu-btn-flat {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.5);
+  background: none;
+}
+
+.card-menu-btn-flat:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.07);
+}
+
+/* ---------- grouped (Months / Days) headers ---------- */
+
+.group-header {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: @window_fg_color;
+  padding-bottom: 2px;
+  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+/* ---------- info side panel ---------- */
+
+.info-panel {
+  background: none;
+}
+
+.info-preview-slot {
+  border-radius: 12px;
+}
+
+.info-preview {
+  border-radius: 12px;
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.info-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: @window_fg_color;
+}
+
+.info-key {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: @easel_text_soft;
+}
+
+.info-value {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  color: @window_fg_color;
+}
+
+.info-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.6);
+  background: none;
+}
+
+.info-btn:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.08);
+}
+
+.info-btn.faved {
+  color: @easel_gold;
+}
+
+/* ---------- thumbnail-size slider (titlebar) ---------- */
+
+.thumb-scale {
   min-height: 2px;
   min-width: 4px;
-  /* hairline bar, but a comfortable click/drag target */
   padding: 8px 0;
 }
 
-.progress-scale trough,
-.volume-scale trough {
+.thumb-scale trough {
   min-height: 2px;
   min-width: 4px;
   border-radius: 1px;
@@ -453,102 +403,50 @@ listview.track-cells {
   box-shadow: none;
 }
 
-.progress-scale highlight,
-.volume-scale highlight {
+.thumb-scale highlight {
   min-height: 2px;
   border-radius: 1px;
-  background-color: @lyre_lavender;
+  background-color: @easel_blue;
   box-shadow: none;
 }
 
-/* Invisible until hovered, then a small round grab dot appears so it's
-   clear where to drag. */
-.progress-scale slider,
-.volume-scale slider {
+.thumb-scale slider {
   min-width: 6px;
   min-height: 6px;
   margin: -2px;
   padding: 0;
   border-radius: 9999px;
-  background-color: @lyre_lavender;
+  background-color: @easel_blue;
   border: 1px solid @window_bg_color;
   box-shadow: 0 1px 3px alpha(#000, 0.25);
   opacity: 0;
   transition: opacity 120ms ease;
 }
 
-.progress-scale:hover slider,
-.volume-scale:hover slider,
-.progress-scale slider:active,
-.volume-scale slider:active {
+.thumb-scale:hover slider,
+.thumb-scale slider:active {
   opacity: 1;
 }
 
 /* Empty-state call-to-action pill. */
 .empty-cta {
-  background-color: @lyre_lavender;
+  background-color: @easel_blue;
   color: #ffffff;
 }
 
 .empty-cta:hover {
-  background-color: shade(@lyre_lavender, 1.08);
-}
-
-/* hover heart on track rows */
-.heart-btn {
-  opacity: 0;
-  min-width: 0;
-  min-height: 0;
-  padding: 2px;
-  color: alpha(@window_fg_color, 0.35);
-  background: none;
-  border: none;
-  box-shadow: none;
-}
-
-.track-row:hover .heart-btn {
-  opacity: 1;
-}
-
-.heart-btn:hover {
-  color: @lyre_gold;
-  background: none;
-}
-
-.heart-btn.faved {
-  opacity: 1;
-  color: @lyre_gold;
-}
-
-/* Up-next row remove button: hidden until the row is hovered. */
-.upnext-remove {
-  opacity: 0;
-  padding: 2px;
-  min-width: 0;
-  min-height: 0;
-  color: alpha(@window_fg_color, 0.4);
-  background: none;
-}
-
-.upnext-row:hover .upnext-remove {
-  opacity: 1;
-}
-
-.upnext-remove:hover {
-  color: @window_fg_color;
-  background: none;
+  background-color: shade(@easel_blue, 1.08);
 }
 
 /* ==================== dark theme ====================
    The window gains the .dark class (mirroring libadwaita's dark state).
    Surfaces and neutral text adapt on their own through the named system
-   colors above; only the accent shades need swapping — lavender and gold
-   lighten so they read on dark surfaces, and the play button flips to a
-   light-lavender fill with dark glyphs. */
+   colors above; only the accent shades need swapping — blue and gold
+   lighten so they read on dark surfaces. */
 
 window.dark link,
 window.dark .root-bg link {
-  color: @lyre_lavender_light;
+  color: @easel_blue_light;
 }
 
 window.dark .tab-btn.tab-active {
@@ -557,7 +455,7 @@ window.dark .tab-btn.tab-active {
 }
 
 window.dark .search-entry:focus-within {
-  border-color: @lyre_lavender_light;
+  border-color: @easel_blue_light;
 }
 
 window.dark .paper {
@@ -565,75 +463,43 @@ window.dark .paper {
 }
 
 window.dark .back-btn:hover {
-  border-color: @lyre_lavender_light;
+  border-color: @easel_blue_light;
 }
 
 window.dark .eyebrow,
 window.dark .mono-dim,
 window.dark .mono-dim-sm,
-window.dark .now-artist,
-window.dark .upnext-clear,
+window.dark .info-key,
 window.dark .swatch-caption {
-  color: @lyre_text_soft_dark;
+  color: @easel_text_soft_dark;
 }
 
-window.dark .filter-label {
-  color: alpha(@lyre_text_soft_dark, 0.75);
+window.dark .thumb-scale highlight,
+window.dark .thumb-scale slider {
+  background-color: @easel_blue_light;
 }
 
-window.dark .time-label {
-  color: alpha(@lyre_text_soft_dark, 0.85);
+window.dark .info-btn.faved {
+  color: @easel_gold_light;
+}
+
+window.dark .tile-heart:hover {
+  color: @easel_gold_light;
 }
 
 window.dark .swatch.chip-selected {
-  border-color: @lyre_lavender_light;
+  border-color: @easel_blue_light;
 }
 
 window.dark .swatch-caption {
   background-color: alpha(#000, 0.55);
 }
 
-window.dark .track-index.playing {
-  color: @lyre_lavender_light;
-}
-
-window.dark .track-title.playing {
-  color: @lyre_lavender_light;
-}
-
-window.dark .mini-transport:checked {
-  color: @lyre_lavender_light;
-}
-
-window.dark .play-btn {
-  background-color: @lyre_lavender_light;
-  color: #1c1c1c;
-}
-
-window.dark .play-btn:hover {
-  background-color: shade(@lyre_lavender_light, 1.08);
-}
-
-window.dark .progress-scale highlight,
-window.dark .volume-scale highlight {
-  background-color: @lyre_lavender_light;
-}
-
-window.dark .progress-scale slider,
-window.dark .volume-scale slider {
-  background-color: @lyre_lavender_light;
-}
-
 window.dark .empty-cta {
-  background-color: @lyre_lavender_light;
+  background-color: @easel_blue_light;
   color: #1c1c1c;
 }
 
 window.dark .empty-cta:hover {
-  background-color: shade(@lyre_lavender_light, 1.08);
-}
-
-window.dark .heart-btn:hover,
-window.dark .heart-btn.faved {
-  color: @lyre_gold_light;
+  background-color: shade(@easel_blue_light, 1.08);
 }
