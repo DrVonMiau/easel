@@ -1,9 +1,9 @@
 """Local photo library: SQLite storage + folder scanner.
 
-An *album* is a folder of photos: every photo's immediate parent directory
-becomes its album, and the album's cover is its earliest photo. The index
-mirrors the shape of Lyre's music library (folders → albums → items) so the
-folder-watching and pruning logic carries over unchanged.
+Photos live in *albums*. Every photo belongs to at least its folder album (the
+folder it was scanned from) and can be added to any number of user-created
+albums on top of that — so album membership is many-to-many (album_photos).
+The folder-watching and pruning shape carries over from Lyre's music library.
 """
 import os
 import sqlite3
@@ -17,12 +17,18 @@ DB_PATH = DATA_DIR / "library.db"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS folders(id INTEGER PRIMARY KEY, path TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS albums(
-  id INTEGER PRIMARY KEY, title TEXT, path TEXT UNIQUE, cover_path TEXT);
+  id INTEGER PRIMARY KEY, title TEXT, path TEXT UNIQUE,
+  cover_path TEXT, user_created INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS photos(
-  id INTEGER PRIMARY KEY, path TEXT UNIQUE, album_id INTEGER,
-  mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0,
-  FOREIGN KEY(album_id) REFERENCES albums(id));
-CREATE INDEX IF NOT EXISTS idx_photos_album ON photos(album_id);
+  id INTEGER PRIMARY KEY, path TEXT UNIQUE,
+  mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS album_photos(
+  album_id INTEGER NOT NULL, photo_id INTEGER NOT NULL,
+  UNIQUE(album_id, photo_id),
+  FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE,
+  FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_ap_album ON album_photos(album_id);
+CREATE INDEX IF NOT EXISTS idx_ap_photo ON album_photos(photo_id);
 """
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic",
@@ -56,22 +62,49 @@ def remove_folder(con, path):
 
 
 def wipe_library(con):
-    """Erase the whole library: photos, albums and the folder list. Image
-    files on disk are untouched."""
-    for table in ("photos", "albums", "folders"):
+    """Erase the whole library. Image files on disk are untouched."""
+    for table in ("album_photos", "photos", "albums", "folders"):
         con.execute(f"DELETE FROM {table}")
     con.commit()
 
 
-def get_or_create_album(con, path):
-    """The album for a photo is its parent folder. Title is the folder name."""
+# ---------- albums ----------
+
+def get_or_create_folder_album(con, path):
+    """The intrinsic album for a photo's folder; title is the folder name."""
     row = con.execute("SELECT id FROM albums WHERE path=?", (path,)).fetchone()
     if row:
         return row["id"]
     title = os.path.basename(path.rstrip("/")) or path
     return con.execute(
-        "INSERT INTO albums(title, path) VALUES (?,?)", (title, path)
+        "INSERT INTO albums(title, path, user_created) VALUES (?,?,0)", (title, path)
     ).lastrowid
+
+
+def create_album(con, title):
+    """A user-created album (no folder on disk backs it)."""
+    album_id = con.execute(
+        "INSERT INTO albums(title, path, user_created) VALUES (?,NULL,1)", (title,)
+    ).lastrowid
+    con.commit()
+    return album_id
+
+
+def add_to_album(con, album_id, photo_ids):
+    for photo_id in photo_ids:
+        con.execute(
+            "INSERT OR IGNORE INTO album_photos(album_id, photo_id) VALUES (?,?)",
+            (album_id, photo_id),
+        )
+    con.commit()
+    _maybe_cover(con, album_id)
+
+
+def remove_from_album(con, album_id, photo_id):
+    con.execute(
+        "DELETE FROM album_photos WHERE album_id=? AND photo_id=?", (album_id, photo_id)
+    )
+    con.commit()
 
 
 def _date_taken(path):
@@ -84,31 +117,26 @@ def _date_taken(path):
 
 
 def scan_file(con, path):
-    """Index one image file (insert or update)."""
+    """Index one image file (insert or update) and file it under its folder."""
     try:
         mtime = os.path.getmtime(path)
     except OSError:
         return
-    existing = con.execute(
-        "SELECT id, mtime, album_id FROM photos WHERE path=?", (path,)
-    ).fetchone()
-    if existing and existing["mtime"] == mtime:
-        _maybe_cover(con, existing["album_id"])
-        return
-
-    album_id = get_or_create_album(con, os.path.dirname(path))
-    date_taken = _date_taken(path)
+    album_id = get_or_create_folder_album(con, os.path.dirname(path))
+    existing = con.execute("SELECT id, mtime FROM photos WHERE path=?", (path,)).fetchone()
     if existing:
-        con.execute(
-            "UPDATE photos SET album_id=?, mtime=?, date_taken=? WHERE id=?",
-            (album_id, mtime, date_taken, existing["id"]),
-        )
+        photo_id = existing["id"]
+        if existing["mtime"] != mtime:
+            con.execute("UPDATE photos SET mtime=? WHERE id=?", (mtime, photo_id))
     else:
-        con.execute(
-            """INSERT INTO photos(path, album_id, mtime, date_taken)
-               VALUES (?,?,?,?)""",
-            (path, album_id, mtime, date_taken),
-        )
+        photo_id = con.execute(
+            "INSERT INTO photos(path, mtime, date_taken) VALUES (?,?,?)",
+            (path, mtime, _date_taken(path)),
+        ).lastrowid
+    con.execute(
+        "INSERT OR IGNORE INTO album_photos(album_id, photo_id) VALUES (?,?)",
+        (album_id, photo_id),
+    )
     con.commit()
     _maybe_cover(con, album_id)
 
@@ -119,7 +147,8 @@ def _maybe_cover(con, album_id):
     if not row or row["cover_path"]:
         return
     photo = con.execute(
-        "SELECT path FROM photos WHERE album_id=? ORDER BY date_taken LIMIT 1",
+        """SELECT p.path FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+           WHERE ap.album_id=? ORDER BY p.date_taken LIMIT 1""",
         (album_id,),
     ).fetchone()
     if photo:
@@ -142,9 +171,12 @@ def scan_folder(con, folder, progress_cb=None):
 
 
 def prune_orphans(con):
-    """Delete albums that no longer hold any photos; refresh stale covers."""
-    con.execute("DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM photos)")
-    # A cover whose photo was removed should fall back to another photo.
+    """Delete empty *folder* albums (user albums are kept even when empty) and
+    refresh any cover whose photo has gone."""
+    con.execute(
+        """DELETE FROM albums WHERE user_created=0
+           AND id NOT IN (SELECT DISTINCT album_id FROM album_photos)"""
+    )
     for row in con.execute(
         """SELECT id FROM albums WHERE cover_path IS NOT NULL
            AND cover_path NOT IN (SELECT path FROM photos)"""
@@ -169,37 +201,39 @@ def scan_all(con, progress_cb=None):
 
 # ---------- queries ----------
 
+_FOLDER_TITLE = """(SELECT a.title FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+   WHERE ap.photo_id = photos.id AND a.path IS NOT NULL LIMIT 1) AS album_title"""
+
+
 def all_photos(con):
     return con.execute(
-        """SELECT photos.*, albums.title AS album_title FROM photos
-           JOIN albums ON albums.id = photos.album_id
-           ORDER BY photos.date_taken DESC, photos.path"""
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            ORDER BY photos.date_taken DESC, photos.path"""
     ).fetchall()
 
 
 def all_albums(con):
     return con.execute(
         """SELECT albums.*,
-             (SELECT COUNT(*) FROM photos WHERE photos.album_id = albums.id) AS photo_count,
-             (SELECT MAX(date_taken) FROM photos WHERE photos.album_id = albums.id) AS date_taken
-           FROM albums ORDER BY albums.title"""
+             (SELECT COUNT(*) FROM album_photos WHERE album_photos.album_id = albums.id) AS photo_count,
+             (SELECT MAX(p.date_taken) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = albums.id) AS date_taken
+           FROM albums ORDER BY user_created DESC, albums.title"""
     ).fetchall()
 
 
 def photos_by_album(con, album_id):
     return con.execute(
-        """SELECT photos.*, albums.title AS album_title FROM photos
-           JOIN albums ON albums.id = photos.album_id
-           WHERE album_id=? ORDER BY photos.date_taken, photos.path""",
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM album_photos ap
+            JOIN photos ON photos.id = ap.photo_id
+            WHERE ap.album_id=? ORDER BY photos.date_taken, photos.path""",
         (album_id,),
     ).fetchall()
 
 
 def get_photo(con, photo_id):
     return con.execute(
-        """SELECT photos.*, albums.title AS album_title FROM photos
-           JOIN albums ON albums.id = photos.album_id
-           WHERE photos.id=?""",
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos WHERE photos.id=?""",
         (photo_id,),
     ).fetchone()
 
@@ -207,8 +241,9 @@ def get_photo(con, photo_id):
 def get_album(con, album_id):
     return con.execute(
         """SELECT albums.*,
-             (SELECT COUNT(*) FROM photos WHERE photos.album_id = albums.id) AS photo_count,
-             (SELECT MAX(date_taken) FROM photos WHERE photos.album_id = albums.id) AS date_taken
+             (SELECT COUNT(*) FROM album_photos WHERE album_photos.album_id = albums.id) AS photo_count,
+             (SELECT MAX(p.date_taken) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = albums.id) AS date_taken
            FROM albums WHERE albums.id=?""",
         (album_id,),
     ).fetchone()
@@ -219,8 +254,21 @@ def set_favorite(con, photo_id, favorite):
     con.commit()
 
 
+def set_photo_date(con, photo_id, date_taken):
+    """Correct a photo's capture date. Stored in the library; sorting and the
+    Months/Days views follow it immediately. (Writing it back into the file's
+    EXIF is a later addition.)"""
+    con.execute("UPDATE photos SET date_taken=? WHERE id=?", (date_taken, photo_id))
+    con.commit()
+
+
 def set_album_cover(con, album_id, path):
     con.execute("UPDATE albums SET cover_path=? WHERE id=?", (path, album_id))
+    con.commit()
+
+
+def rename_album(con, album_id, title):
+    con.execute("UPDATE albums SET title=? WHERE id=?", (title, album_id))
     con.commit()
 
 
@@ -231,6 +279,15 @@ def delete_photo(con, photo_id):
 
 
 def delete_album(con, album_id):
-    con.execute("DELETE FROM photos WHERE album_id=?", (album_id,))
+    """Remove an album. Folder albums also drop their photos from the library;
+    user albums just disband (the photos stay everywhere else they live)."""
+    row = con.execute("SELECT user_created FROM albums WHERE id=?", (album_id,)).fetchone()
+    if row and not row["user_created"]:
+        con.execute(
+            """DELETE FROM photos WHERE id IN
+               (SELECT photo_id FROM album_photos WHERE album_id=?)""",
+            (album_id,),
+        )
     con.execute("DELETE FROM albums WHERE id=?", (album_id,))
     con.commit()
+    prune_orphans(con)

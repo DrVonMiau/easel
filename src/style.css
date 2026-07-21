@@ -294,6 +294,140 @@ gridview.card-grid > child:focus {
   background-color: alpha(#ffffff, 0.18);
 }
 
+/* Hover-reveal favourite heart on photo tiles. */
+.tile-heart {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: #ffffff;
+  background-color: alpha(#000, 0.4);
+  border-radius: 9999px;
+}
+
+.tile-heart:hover {
+  color: @easel_gold_light;
+  background-color: alpha(#000, 0.6);
+}
+
+/* Flat three-dot menu button on album cards (text row, not over artwork). */
+.card-menu-btn-flat {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.5);
+  background: none;
+}
+
+.card-menu-btn-flat:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.07);
+}
+
+/* ---------- grouped (Months / Days) headers ---------- */
+
+.group-header {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: @window_fg_color;
+  padding-bottom: 2px;
+  border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+/* ---------- info side panel ---------- */
+
+.info-panel {
+  background: none;
+}
+
+.info-preview-slot {
+  border-radius: 12px;
+}
+
+.info-preview {
+  border-radius: 12px;
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.info-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: @window_fg_color;
+}
+
+.info-key {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: @easel_text_soft;
+}
+
+.info-value {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  color: @window_fg_color;
+}
+
+.info-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: alpha(@window_fg_color, 0.6);
+  background: none;
+}
+
+.info-btn:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.08);
+}
+
+.info-btn.faved {
+  color: @easel_gold;
+}
+
+/* ---------- thumbnail-size slider (titlebar) ---------- */
+
+.thumb-scale {
+  min-height: 2px;
+  min-width: 4px;
+  padding: 8px 0;
+}
+
+.thumb-scale trough {
+  min-height: 2px;
+  min-width: 4px;
+  border-radius: 1px;
+  background-color: alpha(@window_fg_color, 0.18);
+  border: none;
+  box-shadow: none;
+}
+
+.thumb-scale highlight {
+  min-height: 2px;
+  border-radius: 1px;
+  background-color: @easel_blue;
+  box-shadow: none;
+}
+
+.thumb-scale slider {
+  min-width: 6px;
+  min-height: 6px;
+  margin: -2px;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: @easel_blue;
+  border: 1px solid @window_bg_color;
+  box-shadow: 0 1px 3px alpha(#000, 0.25);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.thumb-scale:hover slider,
+.thumb-scale slider:active {
+  opacity: 1;
+}
+
 /* Empty-state call-to-action pill. */
 .empty-cta {
   background-color: @easel_blue;
@@ -335,8 +469,22 @@ window.dark .back-btn:hover {
 window.dark .eyebrow,
 window.dark .mono-dim,
 window.dark .mono-dim-sm,
+window.dark .info-key,
 window.dark .swatch-caption {
   color: @easel_text_soft_dark;
+}
+
+window.dark .thumb-scale highlight,
+window.dark .thumb-scale slider {
+  background-color: @easel_blue_light;
+}
+
+window.dark .info-btn.faved {
+  color: @easel_gold_light;
+}
+
+window.dark .tile-heart:hover {
+  color: @easel_gold_light;
 }
 
 window.dark .swatch.chip-selected {

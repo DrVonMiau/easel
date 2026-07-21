@@ -24,8 +24,14 @@
 			<summary>Window maximized</summary>
 		</key>
 		<key name="last-tab" type="s">
-			<default>'photos'</default>
+			<default>'all_photos'</default>
 			<summary>Last active library tab</summary>
+		</key>
+		<key name="thumb-size" type="i">
+			<range min="110" max="320"/>
+			<default>168</default>
+			<summary>Thumbnail size</summary>
+			<description>Pixel size of the photo thumbnails in the grids.</description>
 		</key>
 		<key name="watch-folders" type="b">
 			<default>false</default>
