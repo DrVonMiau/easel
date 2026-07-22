@@ -344,12 +344,10 @@ gridview.card-grid > child:focus {
   background: none;
 }
 
-.info-preview-slot {
-  border-radius: 12px;
-}
-
+/* The selected-photo preview: a clean square with rounded corners, no border. */
 .info-preview {
   border-radius: 12px;
+  border: none;
   background-color: alpha(@window_fg_color, 0.05);
 }
 
@@ -373,21 +371,47 @@ gridview.card-grid > child:focus {
   color: @window_fg_color;
 }
 
-.info-btn {
-  min-width: 28px;
-  min-height: 28px;
+/* Close button, floated over the top-right of the preview. */
+.info-close {
+  min-width: 26px;
+  min-height: 26px;
   padding: 0;
-  color: alpha(@window_fg_color, 0.6);
-  background: none;
+  border-radius: 9999px;
+  color: #ffffff;
+  background-color: alpha(#000, 0.4);
 }
 
-.info-btn:hover {
-  color: @window_fg_color;
+.info-close:hover {
+  background-color: alpha(#000, 0.6);
+}
+
+/* Quick-action buttons below the preview: grey round, with the big blue
+   fullscreen button in the middle (echoing Lyre's transport row). */
+.info-action {
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 9999px;
+  color: alpha(@window_fg_color, 0.7);
   background-color: alpha(@window_fg_color, 0.08);
 }
 
-.info-btn.faved {
-  color: @easel_gold;
+.info-action:hover {
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.14);
+}
+
+.info-fs-btn {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 9999px;
+  color: #ffffff;
+  background-color: @easel_blue;
+}
+
+.info-fs-btn:hover {
+  background-color: shade(@easel_blue, 1.08);
 }
 
 /* ---------- thumbnail-size slider (titlebar) ---------- */
@@ -483,8 +507,13 @@ window.dark .thumb-scale slider {
   background-color: @easel_blue_light;
 }
 
-window.dark .info-btn.faved {
-  color: @easel_gold_light;
+window.dark .info-fs-btn {
+  background-color: @easel_blue_light;
+  color: #1c1c1c;
+}
+
+window.dark .info-fs-btn:hover {
+  background-color: shade(@easel_blue_light, 1.08);
 }
 
 window.dark .tile-heart:hover {

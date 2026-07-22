@@ -23,7 +23,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 from . import library as lib
 from .models import Album, Period, Photo
 from .widgets import (AdjustableImage, Swatch, load_full_texture,
-                      load_thumbnail, render_adjusted_texture)
+                      render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -91,6 +91,18 @@ def _dimensions(path):
     return info[1], info[2]
 
 
+class _MenuTarget:
+    """A lightweight stand-in carrying the _menu_* attributes _build_item_menu
+    reads, for context menus not anchored to a bound tile (e.g. the info
+    panel's Add button)."""
+
+    def __init__(self, kind, item_id, entries, extra=None):
+        self._menu_kind = kind
+        self._menu_item_id = item_id
+        self._menu_entries = entries
+        self._menu_extra = extra or {}
+
+
 @Gtk.Template(resource_path="/io/github/drvonmiau/Easel/window.ui")
 class EaselWindow(Adw.ApplicationWindow):
     __gtype_name__ = "EaselWindow"
@@ -139,8 +151,11 @@ class EaselWindow(Adw.ApplicationWindow):
     info_title = Gtk.Template.Child()
     info_rows_box = Gtk.Template.Child()
     info_close_btn = Gtk.Template.Child()
-    info_fav_btn = Gtk.Template.Child()
     info_fullscreen_btn = Gtk.Template.Child()
+    info_rotate_left_btn = Gtk.Template.Child()
+    info_rotate_right_btn = Gtk.Template.Child()
+    info_add_btn = Gtk.Template.Child()
+    info_edit_btn = Gtk.Template.Child()
 
     lightbox_revealer = Gtk.Template.Child()
     lightbox_picture = Gtk.Template.Child()
@@ -162,7 +177,7 @@ class EaselWindow(Adw.ApplicationWindow):
     edit_rotate_right_btn = Gtk.Template.Child()
     edit_reset_btn = Gtk.Template.Child()
 
-    PANEL_WIDTH = 320
+    PANEL_WIDTH = 300
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -582,7 +597,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile.swatch.set_size(self._thumb_size)
         tile.set_size_request(self._thumb_size + 12, -1)
         tile.swatch.set_placeholder("video" if photo.is_video else "")
-        tile.swatch.set_path(photo.path or None)
+        tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.star.set_visible(photo.favorite)
         tile.play.set_visible(photo.is_video)
 
@@ -883,8 +898,6 @@ class EaselWindow(Adw.ApplicationWindow):
             return
         lib.set_favorite(self.con, photo_id, not row["favorite"])
         self._reload_all()
-        if self._info_photo_id == photo_id:
-            self._refresh_info_fav()
 
     def _confirm_delete(self, kind, item_id):
         if kind == "album":
@@ -981,22 +994,30 @@ class EaselWindow(Adw.ApplicationWindow):
     # ---------- info panel ----------
 
     def _setup_info_panel(self):
+        # Square preview sized to the panel width — a fixed size, so the panel
+        # can't be stretched wide by a big image's natural size (the old bug).
+        self._info_preview = Swatch("", size=self.PANEL_WIDTH)
+        self._info_preview.add_css_class("info-preview")
+        self.info_preview_slot.set_child(self._info_preview)
         self.info_close_btn.connect("clicked", lambda *_: self._close_info())
-        self.info_fav_btn.connect("clicked", lambda *_: self._toggle_fav(self._info_photo_id)
-                                  if self._info_photo_id else None)
         self.info_fullscreen_btn.connect("clicked", lambda *_: self._info_fullscreen())
+        self.info_rotate_left_btn.connect("clicked", lambda *_: self._rotate_info(-90))
+        self.info_rotate_right_btn.connect("clicked", lambda *_: self._rotate_info(90))
+        self.info_add_btn.connect("clicked", self._on_info_add)
+        self.info_edit_btn.connect(
+            "clicked", lambda *_: self._open_editor(self._info_photo_id)
+            if self._info_photo_id else None)
+
+    def _photo_rotation(self, row):
+        return (row["rotation"] or 0) if "rotation" in row.keys() else 0
 
     def _show_info(self, photo_id):
         row = lib.get_photo(self.con, photo_id)
         if not row:
             return
         self._info_photo_id = photo_id
-        if self._info_preview is None:
-            self._info_preview = Gtk.Picture(content_fit=Gtk.ContentFit.COVER)
-            self._info_preview.add_css_class("info-preview")
-            self._info_preview.set_size_request(-1, 220)
-            self.info_preview_slot.append(self._info_preview)
-        self._info_preview.set_paintable(load_thumbnail(row["path"], 480))
+        self._info_preview.set_size(self.PANEL_WIDTH)
+        self._info_preview.set_path(row["path"], rotation=self._photo_rotation(row))
         self.info_title.set_label(os.path.basename(row["path"]))
 
         self._clear_box(self.info_rows_box)
@@ -1015,7 +1036,6 @@ class EaselWindow(Adw.ApplicationWindow):
         for key, value in pairs:
             self.info_rows_box.append(self._info_row(key, value))
 
-        self._refresh_info_fav()
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
@@ -1029,16 +1049,27 @@ class EaselWindow(Adw.ApplicationWindow):
         row.append(v)
         return row
 
-    def _refresh_info_fav(self):
+    def _rotate_info(self, delta):
         if self._info_photo_id is None:
             return
         row = lib.get_photo(self.con, self._info_photo_id)
-        fav = bool(row["favorite"]) if row else False
-        self.info_fav_btn.set_icon_name("starred-symbolic" if fav else "non-starred-symbolic")
-        if fav:
-            self.info_fav_btn.add_css_class("faved")
-        else:
-            self.info_fav_btn.remove_css_class("faved")
+        if not row:
+            return
+        new = (self._photo_rotation(row) + delta) % 360
+        lib.set_rotation(self.con, self._info_photo_id, new)
+        self._info_preview.set_path(row["path"], rotation=new)
+        self._reload_all()  # refresh grids/lightbox with the new orientation
+
+    def _on_info_add(self, button):
+        if self._info_photo_id is None:
+            return
+        carrier = _MenuTarget("photo", self._info_photo_id,
+                              [("Add to Favourites", "toggle-fav"), ("Add to", "__albums__")])
+        popover = Gtk.PopoverMenu.new_from_model(self._build_item_menu(carrier))
+        popover.set_has_arrow(True)
+        popover.set_parent(button)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+        popover.popup()
 
     def _close_info(self):
         self.info_revealer.set_reveal_child(False)
@@ -1105,6 +1136,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_texture = texture
         self._reset_editor()
         self._edit_image.set_texture(texture)
+        # Start from the photo's stored display rotation so the editor matches
+        # what's shown everywhere else; saving bakes it into the copy.
+        rotation = (row["rotation"] or 0) if "rotation" in row.keys() else 0
+        if rotation:
+            self._edit_image.set_adjustment("rotation", rotation)
         self.edit_revealer.set_visible(True)
         self.edit_revealer.set_reveal_child(True)
 
@@ -1238,7 +1274,8 @@ class EaselWindow(Adw.ApplicationWindow):
             # clean None — set_filename() leaves the widget in a broken state
             # (non-null content, null paintable) when a file can't be decoded,
             # tripping gtk_scaler_new assertions on every redraw.
-            self.lightbox_picture.set_paintable(load_full_texture(photo.path))
+            self.lightbox_picture.set_paintable(
+                load_full_texture(photo.path, photo.rotation))
         name = os.path.basename(photo.path) if photo.path else ""
         date = _fmt_date(photo.date_taken)
         pos = f"{self._lightbox_index + 1} / {len(self._lightbox_photos)}"
@@ -1283,6 +1320,9 @@ class EaselWindow(Adw.ApplicationWindow):
                 return True
             return False
         if not self._lightbox_visible():
+            if keyval == Gdk.KEY_Escape and self.info_revealer.get_reveal_child():
+                self._close_info()
+                return True
             return False
         if keyval == Gdk.KEY_Escape:
             self._close_lightbox()
@@ -1641,7 +1681,8 @@ class EaselWindow(Adw.ApplicationWindow):
     def _photo_from_row(self, r):
         return Photo(id=r["id"], path=r["path"], album=r["album_title"] or "",
                      date_taken=r["date_taken"] or 0.0, favorite=bool(r["favorite"]),
-                     is_video=lib.is_video(r["path"]))
+                     is_video=lib.is_video(r["path"]),
+                     rotation=(r["rotation"] or 0) if "rotation" in r.keys() else 0)
 
     def _reload_all(self):
         self._photos_all = [self._photo_from_row(r) for r in lib.all_photos(self.con)]
