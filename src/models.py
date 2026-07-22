@@ -9,6 +9,7 @@ class Photo(GObject.Object):
     date_taken = GObject.Property(type=float, default=0.0)
     favorite = GObject.Property(type=bool, default=False)
     is_video = GObject.Property(type=bool, default=False)
+    rotation = GObject.Property(type=int, default=0)
 
 
 class Album(GObject.Object):

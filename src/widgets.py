@@ -144,18 +144,24 @@ def _texture_from_pixbuf(pixbuf):
         Gdk.MemoryFormat.R8G8B8A8, data, pixbuf.get_rowstride())
 
 
-def load_full_texture(path):
+def load_full_texture(path, rotation=0):
     """A full-resolution Gdk.Texture for `path` (the lightbox), or None if it
-    can't be loaded. Tries GTK's own loaders first (they cover PNG/JPEG without
-    needing gdk-pixbuf loader modules), then falls back to gdk-pixbuf."""
+    can't be loaded, with an optional non-destructive rotation applied. Tries
+    GTK's own loaders first (they cover PNG/JPEG without needing gdk-pixbuf
+    loader modules) when unrotated, then falls back to gdk-pixbuf."""
     if not path:
         return None
+    rot = _ROTATIONS.get(rotation % 360)
+    if rot is None:
+        try:
+            return Gdk.Texture.new_from_filename(path)
+        except Exception:
+            pass
     try:
-        return Gdk.Texture.new_from_filename(path)
-    except Exception:
-        pass
-    try:
-        return _texture_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file(path))
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+        if rot is not None:
+            pixbuf = pixbuf.rotate_simple(rot)
+        return _texture_from_pixbuf(pixbuf)
     except Exception as exc:
         _log_load_failure(path, exc)
         return None

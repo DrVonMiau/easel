@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS albums(
   cover_path TEXT, user_created INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS photos(
   id INTEGER PRIMARY KEY, path TEXT UNIQUE,
-  mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0);
+  mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0,
+  rotation INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS album_photos(
   album_id INTEGER NOT NULL, photo_id INTEGER NOT NULL,
   UNIQUE(album_id, photo_id),
@@ -49,6 +50,12 @@ def connect():
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(SCHEMA)
+    # Migration for libraries created before non-destructive rotation.
+    try:
+        con.execute("ALTER TABLE photos ADD COLUMN rotation INTEGER DEFAULT 0")
+        con.commit()
+    except sqlite3.OperationalError:
+        pass
     # One-off cleanup for libraries scanned before hidden files were skipped:
     # drop any indexed dotfile / AppleDouble sidecar (a "/." anywhere in the
     # path means a hidden path component). Cascades to album_photos.
@@ -278,6 +285,13 @@ def set_photo_date(con, photo_id, date_taken):
     Months/Days views follow it immediately. (Writing it back into the file's
     EXIF is a later addition.)"""
     con.execute("UPDATE photos SET date_taken=? WHERE id=?", (date_taken, photo_id))
+    con.commit()
+
+
+def set_rotation(con, photo_id, degrees):
+    """Store a non-destructive display rotation (0/90/180/270). The file on disk
+    isn't touched; the rotation is applied when the photo is drawn."""
+    con.execute("UPDATE photos SET rotation=? WHERE id=?", (degrees % 360, photo_id))
     con.commit()
 
 

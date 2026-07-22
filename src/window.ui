@@ -593,7 +593,9 @@
               </object>
             </child>
 
-            <!-- Info panel: slides in from the right on single click -->
+            <!-- Info panel: slides in from the right on single click. The
+                 selected photo sits at the top (aligned with the paper), the
+                 quick actions sit below it, then the file's details. -->
             <child>
               <object class="GtkRevealer" id="info_revealer">
                 <property name="hexpand">false</property>
@@ -603,71 +605,93 @@
                 <property name="child">
                   <object class="GtkBox" id="info_panel">
                     <property name="orientation">vertical</property>
-                    <property name="spacing">16</property>
+                    <property name="spacing">14</property>
                     <property name="vexpand">true</property>
                     <style>
                       <class name="info-panel"/>
                     </style>
 
                     <child>
-                      <object class="GtkCenterBox">
-                        <property name="start-widget">
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Info</property>
-                            <property name="xalign">0</property>
+                      <object class="GtkOverlay" id="info_preview_slot">
+                        <child type="overlay">
+                          <object class="GtkButton" id="info_close_btn">
+                            <property name="icon-name">window-close-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Close</property>
+                            <property name="halign">end</property>
+                            <property name="valign">start</property>
+                            <property name="margin-top">8</property>
+                            <property name="margin-end">8</property>
                             <style>
-                              <class name="eyebrow"/>
+                              <class name="flat"/>
+                              <class name="info-close"/>
                             </style>
                           </object>
-                        </property>
-                        <property name="end-widget">
-                          <object class="GtkBox">
-                            <property name="spacing">2</property>
-                            <child>
-                              <object class="GtkButton" id="info_fav_btn">
-                                <property name="icon-name">non-starred-symbolic</property>
-                                <property name="tooltip-text" translatable="yes">Favourite</property>
-                                <property name="valign">center</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="info-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="info_fullscreen_btn">
-                                <property name="icon-name">view-fullscreen-symbolic</property>
-                                <property name="tooltip-text" translatable="yes">View full screen</property>
-                                <property name="valign">center</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="info-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="info_close_btn">
-                                <property name="icon-name">window-close-symbolic</property>
-                                <property name="tooltip-text" translatable="yes">Close</property>
-                                <property name="valign">center</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="info-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                          </object>
-                        </property>
+                        </child>
                       </object>
                     </child>
 
                     <child>
-                      <object class="GtkBox" id="info_preview_slot">
-                        <property name="orientation">vertical</property>
-                        <property name="overflow">hidden</property>
-                        <style>
-                          <class name="info-preview-slot"/>
-                        </style>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="halign">center</property>
+                        <property name="spacing">14</property>
+                        <property name="margin-top">2</property>
+                        <property name="margin-bottom">2</property>
+                        <child>
+                          <object class="GtkButton" id="info_rotate_left_btn">
+                            <property name="icon-name">object-rotate-left-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Rotate left</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="info-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="info_rotate_right_btn">
+                            <property name="icon-name">object-rotate-right-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Rotate right</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="info-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="info_fullscreen_btn">
+                            <property name="icon-name">view-fullscreen-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">View full screen</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="info-fs-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="info_add_btn">
+                            <property name="icon-name">list-add-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Add to favourites or an album</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="info-action"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="info_edit_btn">
+                            <property name="icon-name">document-edit-symbolic</property>
+                            <property name="tooltip-text" translatable="yes">Edit</property>
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="info-action"/>
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </child>
 
