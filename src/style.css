@@ -385,27 +385,28 @@ gridview.card-grid > child:focus {
   background-color: alpha(#000, 0.6);
 }
 
-/* Quick-action buttons below the preview: grey round, with the big blue
-   fullscreen button in the middle (echoing Lyre's transport row). */
+/* Quick-action buttons below the preview: flat icons on the panel background
+   (no circle), with the fullscreen button a blue rounded square in the middle
+   — matching the segmented tabs' shape. */
 .info-action {
-  min-width: 38px;
-  min-height: 38px;
+  min-width: 34px;
+  min-height: 34px;
   padding: 0;
-  border-radius: 9999px;
-  color: alpha(@window_fg_color, 0.7);
-  background-color: alpha(@window_fg_color, 0.08);
+  border-radius: 8px;
+  color: alpha(@window_fg_color, 0.65);
+  background: none;
 }
 
 .info-action:hover {
   color: @window_fg_color;
-  background-color: alpha(@window_fg_color, 0.14);
+  background-color: alpha(@window_fg_color, 0.08);
 }
 
 .info-fs-btn {
-  min-width: 48px;
-  min-height: 48px;
+  min-width: 46px;
+  min-height: 46px;
   padding: 0;
-  border-radius: 9999px;
+  border-radius: 11px;
   color: #ffffff;
   background-color: @easel_blue;
 }
