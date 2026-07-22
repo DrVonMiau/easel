@@ -6,9 +6,11 @@ replaced by two photo surfaces — a slide-in info panel (single click) and a
 full-window lightbox (double click) — and the volume slider becomes a
 thumbnail-size slider.
 
-Tabs are two groups: the primary time views (All Photos / Months / Days) and a
-secondary group (Albums / Favourites / Maps / People). Maps and People are
-placeholders for now — they need EXIF GPS and face detection respectively.
+Tabs are two groups: the primary time views (All Photos / Months / Years) and a
+secondary group (Albums / Favourites / Maps / People). Months and Years show
+bounded period cards that drill into a recycling grid, so a big library never
+loads a tile per photo. Maps and People are placeholders for now — they need
+EXIF GPS and face detection respectively.
 """
 import json
 import os
@@ -19,7 +21,7 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
-from .models import Album, Photo
+from .models import Album, Period, Photo
 from .widgets import Swatch, load_full_texture, load_thumbnail
 
 APP_ID = "io.github.drvonmiau.Easel"
@@ -117,8 +119,8 @@ class EaselWindow(Adw.ApplicationWindow):
 
     paper_stack = Gtk.Template.Child()
     photo_grid = Gtk.Template.Child()
-    months_box = Gtk.Template.Child()
-    years_box = Gtk.Template.Child()
+    months_grid = Gtk.Template.Child()
+    years_grid = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
     fav_grid = Gtk.Template.Child()
 
@@ -141,6 +143,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
     lightbox_revealer = Gtk.Template.Child()
     lightbox_picture = Gtk.Template.Child()
+    lightbox_video = Gtk.Template.Child()
     lightbox_caption = Gtk.Template.Child()
     lightbox_prev_btn = Gtk.Template.Child()
     lightbox_next_btn = Gtk.Template.Child()
@@ -156,7 +159,8 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
-        self._detail_album_id = None
+        # What the detail page is showing: ("album", id) or ("period", kind, key, title).
+        self._detail_source = None
         self._search_query = ""
         self._photos_all = []
         self._albums_all = []
@@ -313,14 +317,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._relayout_thumbs()
 
     def _relayout_thumbs(self):
-        # Grids rebind from their stores (bind reads the current thumb size);
-        # the grouped views are rebuilt only if currently shown.
+        # Photo grids rebind from their stores (bind reads the current thumb
+        # size). Month/Year period cards are a fixed size, so they don't change;
+        # only the drill-down detail grid needs re-rendering.
         self._apply_filters()
-        if self.view == "months":
-            self._render_months()
-        elif self.view == "years":
-            self._render_years()
-        elif self.view == "detail":
+        if self.view == "detail":
             self._render_detail()
 
     def _on_realize(self, *_args):
@@ -435,6 +436,24 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_photos_grid.set_model(Gtk.NoSelection(model=self.detail_store))
         self.detail_photos_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "detail")))
 
+        # Months / Years show bounded period cards, not a tile per photo.
+        self.months_store = Gio.ListStore(item_type=Period)
+        self.months_grid.set_model(Gtk.SingleSelection(model=self.months_store))
+        self.months_grid.set_factory(self._factory(self._bind_period_card))
+        self.months_grid.set_single_click_activate(True)
+        self.months_grid.connect("activate", self._on_period_activated)
+
+        self.years_store = Gio.ListStore(item_type=Period)
+        self.years_grid.set_model(Gtk.SingleSelection(model=self.years_store))
+        self.years_grid.set_factory(self._factory(self._bind_period_card))
+        self.years_grid.set_single_click_activate(True)
+        self.years_grid.connect("activate", self._on_period_activated)
+
+    def _on_period_activated(self, gridview, position):
+        period = gridview.get_model().get_item(position)
+        if period is not None:
+            self._open_period(period.kind, period.key, period.title)
+
     def _factory(self, bind_fn):
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", lambda _f, item: item.set_child(Gtk.Box()))
@@ -478,6 +497,13 @@ class EaselWindow(Adw.ApplicationWindow):
         star.set_visible(False)
         overlay.add_overlay(star)
 
+        # Centered play badge marks videos (which don't get a decoded thumbnail).
+        play = Gtk.Image(icon_name="media-playback-start-symbolic",
+                         halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
+                         css_classes=["video-badge"])
+        play.set_visible(False)
+        overlay.add_overlay(play)
+
         menu_btn = Gtk.Button(icon_name="easel-more-symbolic", halign=Gtk.Align.END,
                               valign=Gtk.Align.START, margin_top=6, margin_end=6,
                               tooltip_text="More", css_classes=["card-menu-btn"])
@@ -487,6 +513,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
         box.append(overlay)
         box.swatch, box.heart, box.star, box.menu_btn = swatch, heart, star, menu_btn
+        box.play = play
         box._photo = None
         box._source = "photos"
         box._menu_open = False
@@ -537,8 +564,10 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_extra = {}
         tile.swatch.set_size(self._thumb_size)
         tile.set_size_request(self._thumb_size + 12, -1)
+        tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None)
         tile.star.set_visible(photo.favorite)
+        tile.play.set_visible(photo.is_video)
 
     def _tile_pressed(self, n_press, tile):
         photo = tile._photo
@@ -664,42 +693,78 @@ class EaselWindow(Adw.ApplicationWindow):
         gesture.connect("pressed", lambda _g, _n, x, y: self._show_item_menu(box, box, x, y))
         box.add_controller(gesture)
 
-    # ---------- grouped views (Months / Days) ----------
+    # ---------- period views (Months / Years) ----------
+
+    # (kind -> (key strftime, title strftime)). "Undated" catches bad/zero dates.
+    _PERIOD_FMT = {"month": ("%Y-%m", "%B %Y"), "year": ("%Y", "%Y")}
+
+    @staticmethod
+    def _period_of(date_taken, kind):
+        key_fmt, title_fmt = EaselWindow._PERIOD_FMT[kind]
+        try:
+            dt = datetime.fromtimestamp(date_taken)
+            return dt.strftime(key_fmt), dt.strftime(title_fmt)
+        except (ValueError, OSError):
+            return "undated", "Undated"
+
+    def _compute_periods(self, kind):
+        """Bucket the visible photos into month/year Periods, newest first, each
+        with its newest photo as the cover. Bounded to a handful (years) or a
+        few hundred (months) cards — never one per photo."""
+        order = []
+        buckets = {}
+        for p in sorted(self._visible_photos, key=lambda p: -p.date_taken):
+            key, title = self._period_of(p.date_taken, kind)
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = buckets[key] = {"title": title, "count": 0, "cover": p.path}
+                order.append(key)
+            bucket["count"] += 1
+        periods = []
+        for key in order:
+            b = buckets[key]
+            n = b["count"]
+            periods.append(Period(kind=kind, key=key, title=b["title"],
+                                  subtitle=f"{n} photo{'s' if n != 1 else ''}",
+                                  cover_path=b["cover"] or ""))
+        return periods
 
     def _render_months(self):
-        self._render_grouped(self.months_box, "%Y-%m", "%B %Y")
+        self._fill_period_store(self.months_store, self._compute_periods("month"))
 
     def _render_years(self):
-        self._render_grouped(self.years_box, "%Y", "%Y")
+        self._fill_period_store(self.years_store, self._compute_periods("year"))
 
-    def _render_grouped(self, container, key_fmt, label_fmt):
-        self._clear_box(container)
-        photos = sorted(self._visible_photos, key=lambda p: -p.date_taken)
-        groups = []
-        index = {}
-        for p in photos:
-            try:
-                dt = datetime.fromtimestamp(p.date_taken)
-                key, label = dt.strftime(key_fmt), dt.strftime(label_fmt)
-            except (ValueError, OSError):
-                key, label = "unknown", "Undated"
-            if key not in index:
-                index[key] = len(groups)
-                groups.append((label, []))
-            groups[index[key]][1].append(p)
-        for label, items in groups:
-            section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            header = Gtk.Label(label=label, xalign=0, css_classes=["group-header"])
-            section.append(header)
-            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False,
-                               row_spacing=6, column_spacing=6, halign=Gtk.Align.FILL,
-                               max_children_per_line=30)
-            for p in items:
-                tile = self._make_tile()
-                self._bind_tile(tile, p, "photos")
-                flow.append(tile)
-            section.append(flow)
-            container.append(section)
+    def _fill_period_store(self, store, periods):
+        store.remove_all()
+        for period in periods:
+            store.append(period)
+
+    def _bind_period_card(self, item):
+        period = item.get_item()
+        box = item.get_child()
+        if not hasattr(box, "swatch"):
+            box = self._period_card_widget()
+            item.set_child(box)
+        box.swatch.set_placeholder(period.title)
+        box.swatch.set_path(period.cover_path or None)
+        box.title.set_label(period.title)
+        box.subtitle.set_label(period.subtitle)
+
+    def _period_card_widget(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=192,
+                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
+        box.set_cursor(POINTER_CURSOR)
+        box.add_css_class("card-box")
+        swatch = Swatch("", size=192)
+        swatch.add_css_class("card-swatch")
+        title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
+        subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
+        box.append(swatch)
+        box.append(title)
+        box.append(subtitle)
+        box.swatch, box.title, box.subtitle = swatch, title, subtitle
+        return box
 
     # ---------- context menus ----------
 
@@ -827,7 +892,9 @@ class EaselWindow(Adw.ApplicationWindow):
         {"photo": lib.delete_photo, "album": lib.delete_album}[kind](self.con, item_id)
         if kind == "photo" and self._info_photo_id == item_id:
             self._close_info()
-        if self.view == "detail" and kind == "album" and self._detail_album_id == item_id:
+        if (self.view == "detail" and kind == "album"
+                and self._detail_source and self._detail_source[0] == "album"
+                and self._detail_source[1] == item_id):
             self._go_back()
         self._reload_all()
 
@@ -1000,8 +1067,20 @@ class EaselWindow(Adw.ApplicationWindow):
             self._open_lightbox([self._photo_from_row(row)], 0)
 
     def _close_lightbox(self):
+        self._stop_lightbox_video()
         self.lightbox_revealer.set_reveal_child(False)
         self.lightbox_revealer.set_visible(False)
+
+    def _stop_lightbox_video(self):
+        """Stop and release any playing video so audio doesn't keep going after
+        navigating or closing."""
+        try:
+            stream = self.lightbox_video.get_media_stream()
+            if stream is not None:
+                stream.pause()
+            self.lightbox_video.set_file(None)
+        except Exception:
+            pass
 
     def _lightbox_step(self, delta):
         if not self._lightbox_photos:
@@ -1011,12 +1090,26 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _show_lightbox_photo(self):
         photo = self._lightbox_photos[self._lightbox_index]
-        # Full resolution here (one image at a time). Load the texture ourselves
-        # and only ever hand GtkPicture a valid paintable or a clean None —
-        # set_filename() leaves the widget in a broken state (a non-null content
-        # with a null paintable) when a file can't be decoded, which then trips
-        # gtk_scaler_new assertions on every redraw and takes the app down.
-        self.lightbox_picture.set_paintable(load_full_texture(photo.path))
+        self._stop_lightbox_video()
+        if photo.is_video:
+            # Play videos with GtkVideo (GStreamer). Guarded so a codec/runtime
+            # problem degrades to "nothing plays" rather than taking the app down.
+            self.lightbox_picture.set_visible(False)
+            self.lightbox_picture.set_paintable(None)
+            self.lightbox_video.set_visible(True)
+            try:
+                self.lightbox_video.set_file(Gio.File.new_for_path(photo.path))
+            except Exception:
+                self.lightbox_video.set_visible(False)
+        else:
+            self.lightbox_video.set_visible(False)
+            self.lightbox_picture.set_visible(True)
+            # Full resolution here (one image at a time). Load the texture
+            # ourselves and only ever hand GtkPicture a valid paintable or a
+            # clean None — set_filename() leaves the widget in a broken state
+            # (non-null content, null paintable) when a file can't be decoded,
+            # tripping gtk_scaler_new assertions on every redraw.
+            self.lightbox_picture.set_paintable(load_full_texture(photo.path))
         name = os.path.basename(photo.path) if photo.path else ""
         date = _fmt_date(photo.date_taken)
         pos = f"{self._lightbox_index + 1} / {len(self._lightbox_photos)}"
@@ -1264,11 +1357,16 @@ class EaselWindow(Adw.ApplicationWindow):
                 btn.remove_css_class("tab-active")
 
     def _open_album(self, album_id):
-        album = lib.get_album(self.con, album_id)
-        if not album:
+        if not lib.get_album(self.con, album_id):
             return
+        self._open_detail(("album", album_id))
+
+    def _open_period(self, kind, key, title):
+        self._open_detail(("period", kind, key, title))
+
+    def _open_detail(self, source):
         self.view = "detail"
-        self._detail_album_id = album_id
+        self._detail_source = source
         self.paper_stack.set_visible_child_name("detail")
         self.detail_back_row.set_visible(True)
         self.sort_btn.set_visible(False)
@@ -1285,26 +1383,43 @@ class EaselWindow(Adw.ApplicationWindow):
             child = nxt
 
     def _render_detail(self):
-        album = lib.get_album(self.con, self._detail_album_id)
-        if not album:
+        source = self._detail_source
+        if not source:
             self._go_back()
             return
-        self.detail_kind_label.set_label("Album")
-        self._clear_box(self.detail_hero_slot)
-        hero = Swatch("album", size=108)
-        hero.set_path(album["cover_path"] or None)
-        self.detail_hero_slot.append(hero)
-        self.detail_name_label.set_label(album["title"])
+        if source[0] == "album":
+            album = lib.get_album(self.con, source[1])
+            if not album:
+                self._go_back()
+                return
+            kind_label, title = "Album", album["title"]
+            cover = album["cover_path"] or None
+            photos = [self._photo_from_row(r)
+                      for r in lib.photos_by_album(self.con, album["id"])]
+            date = _fmt_date(album["date_taken"])
+        else:  # ("period", kind, key, title)
+            _, kind, key, title = source
+            kind_label = "Month" if kind == "month" else "Year"
+            photos = [p for p in self._visible_photos
+                      if self._period_of(p.date_taken, kind)[0] == key]
+            photos.sort(key=lambda p: p.date_taken)
+            cover = photos[-1].path if photos else None
+            date = ""
 
-        rows = lib.photos_by_album(self.con, album["id"])
-        count = len(rows)
+        self.detail_kind_label.set_label(kind_label)
+        self._clear_box(self.detail_hero_slot)
+        hero = Swatch(kind_label.lower(), size=108)
+        hero.set_path(cover)
+        self.detail_hero_slot.append(hero)
+        self.detail_name_label.set_label(title)
+
+        count = len(photos)
         parts = [f"{count} photo{'s' if count != 1 else ''}"]
-        date = _fmt_date(album["date_taken"])
         if date:
             parts.append(date)
         self.detail_stats_label.set_label(" · ".join(parts))
 
-        self._detail_photos = [self._photo_from_row(r) for r in rows]
+        self._detail_photos = photos
         self.detail_store.remove_all()
         for p in self._detail_photos:
             self.detail_store.append(p)
@@ -1391,7 +1506,8 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _photo_from_row(self, r):
         return Photo(id=r["id"], path=r["path"], album=r["album_title"] or "",
-                     date_taken=r["date_taken"] or 0.0, favorite=bool(r["favorite"]))
+                     date_taken=r["date_taken"] or 0.0, favorite=bool(r["favorite"]),
+                     is_video=lib.is_video(r["path"]))
 
     def _reload_all(self):
         self._photos_all = [self._photo_from_row(r) for r in lib.all_photos(self.con)]
@@ -1402,7 +1518,7 @@ class EaselWindow(Adw.ApplicationWindow):
             for r in lib.all_albums(self.con)
         ]
         self._apply_filters()
-        if self.view == "detail" and self._detail_album_id is not None:
+        if self.view == "detail" and self._detail_source is not None:
             self._render_detail()
         elif self.view in VIEW_NAMES:
             self._select_tab(self.view)

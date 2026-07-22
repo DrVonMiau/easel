@@ -391,13 +391,17 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkBox" id="months_box">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">28</property>
+                              <object class="GtkGridView" id="months_grid">
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
-                                <property name="margin-bottom">8</property>
+                                <property name="margin-bottom">1</property>
                                 <property name="margin-start">32</property>
                                 <property name="margin-end">32</property>
+                                <property name="single-click-activate">true</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
                               </object>
                             </property>
                           </object>
@@ -415,13 +419,17 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkBox" id="years_box">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">28</property>
+                              <object class="GtkGridView" id="years_grid">
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
-                                <property name="margin-bottom">8</property>
+                                <property name="margin-bottom">1</property>
                                 <property name="margin-start">32</property>
                                 <property name="margin-end">32</property>
+                                <property name="single-click-activate">true</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
                               </object>
                             </property>
                           </object>
@@ -774,6 +782,14 @@
                         <property name="vexpand">true</property>
                         <property name="content-fit">contain</property>
                         <property name="can-shrink">true</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkVideo" id="lightbox_video">
+                        <property name="visible">false</property>
+                        <property name="hexpand">true</property>
+                        <property name="vexpand">true</property>
+                        <property name="autoplay">true</property>
                       </object>
                     </child>
                     <child>
