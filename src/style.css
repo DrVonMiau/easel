@@ -507,3 +507,96 @@ window.dark .empty-cta {
 window.dark .empty-cta:hover {
   background-color: shade(@easel_blue_light, 1.08);
 }
+
+/* ---------- photo editor ---------- */
+
+.editor {
+  background-color: alpha(#000, 0.94);
+}
+
+.editor-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.edit-tools {
+  background-color: alpha(#ffffff, 0.05);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.editor-eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: alpha(#ffffff, 0.55);
+  margin-bottom: 4px;
+}
+
+.editor-slider-label {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 12px;
+  color: alpha(#ffffff, 0.8);
+}
+
+.editor-cancel {
+  color: alpha(#ffffff, 0.8);
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.editor-cancel:hover {
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.1);
+}
+
+.editor-save {
+  background-color: @easel_blue;
+  color: #ffffff;
+}
+
+.editor-save:hover {
+  background-color: shade(@easel_blue, 1.08);
+}
+
+.editor-tool-btn {
+  color: alpha(#ffffff, 0.85);
+  background-color: alpha(#ffffff, 0.08);
+  border: none;
+  box-shadow: none;
+}
+
+.editor-tool-btn:hover {
+  color: #ffffff;
+  background-color: alpha(#ffffff, 0.16);
+}
+
+/* Blue slider on the dark editor panel. */
+.editor-scale {
+  min-height: 2px;
+  padding: 8px 0;
+}
+
+.editor-scale trough {
+  min-height: 3px;
+  border-radius: 2px;
+  background-color: alpha(#ffffff, 0.2);
+}
+
+.editor-scale highlight {
+  min-height: 3px;
+  border-radius: 2px;
+  background-color: @easel_blue_light;
+}
+
+.editor-scale slider {
+  min-width: 14px;
+  min-height: 14px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px alpha(#000, 0.4);
+  margin: -6px;
+}

@@ -22,7 +22,8 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Photo
-from .widgets import Swatch, load_full_texture, load_thumbnail
+from .widgets import (AdjustableImage, Swatch, load_full_texture,
+                      load_thumbnail, render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -150,6 +151,17 @@ class EaselWindow(Adw.ApplicationWindow):
     lightbox_close_btn = Gtk.Template.Child()
     lightbox_fav_btn = Gtk.Template.Child()
 
+    edit_revealer = Gtk.Template.Child()
+    edit_image_slot = Gtk.Template.Child()
+    edit_brightness = Gtk.Template.Child()
+    edit_contrast = Gtk.Template.Child()
+    edit_saturation = Gtk.Template.Child()
+    edit_cancel_btn = Gtk.Template.Child()
+    edit_save_btn = Gtk.Template.Child()
+    edit_rotate_left_btn = Gtk.Template.Child()
+    edit_rotate_right_btn = Gtk.Template.Child()
+    edit_reset_btn = Gtk.Template.Child()
+
     PANEL_WIDTH = 320
 
     def __init__(self, **kwargs):
@@ -177,6 +189,10 @@ class EaselWindow(Adw.ApplicationWindow):
         self._lightbox_photos = []
         self._lightbox_index = 0
 
+        self._edit_image = None
+        self._edit_texture = None
+        self._edit_photo = None
+
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
 
@@ -195,6 +211,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._setup_lists()
         self._setup_info_panel()
         self._setup_lightbox()
+        self._setup_editor()
         self._setup_help_overlay()
 
         for key, btn in self._tab_buttons.items():
@@ -824,7 +841,7 @@ class EaselWindow(Adw.ApplicationWindow):
             self._open_album(item_id)
             return
         if name == "edit-image":
-            self._toast("Image editing is coming soon")
+            self._open_editor(item_id)
             return
         if name == "edit-info":
             self._edit_info(item_id)
@@ -1047,6 +1064,118 @@ class EaselWindow(Adw.ApplicationWindow):
     def _lightbox_visible(self):
         return self.lightbox_revealer.get_visible()
 
+    # ---------- editor ----------
+
+    def _setup_editor(self):
+        self._edit_image = AdjustableImage()
+        self.edit_image_slot.append(self._edit_image)
+        # Slider value (−100..100) -> adjustment. Brightness is additive (±0.5);
+        # contrast and saturation are factors around 1.0.
+        self.edit_brightness.connect(
+            "value-changed", lambda s: self._edit_set("brightness", s.get_value() / 200.0))
+        self.edit_contrast.connect(
+            "value-changed", lambda s: self._edit_set("contrast", 1.0 + s.get_value() / 100.0))
+        self.edit_saturation.connect(
+            "value-changed", lambda s: self._edit_set("saturation", 1.0 + s.get_value() / 100.0))
+        self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
+        self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
+        self.edit_reset_btn.connect("clicked", lambda *_: self._reset_editor())
+        self.edit_cancel_btn.connect("clicked", lambda *_: self._close_editor())
+        self.edit_save_btn.connect("clicked", lambda *_: self._save_edit())
+
+    def _edit_set(self, name, value):
+        if self._edit_image is not None:
+            self._edit_image.set_adjustment(name, value)
+
+    def _editor_visible(self):
+        return self.edit_revealer.get_visible()
+
+    def _open_editor(self, photo_id):
+        row = lib.get_photo(self.con, photo_id)
+        if not row:
+            return
+        if lib.is_video(row["path"]):
+            self._toast("Videos can't be edited")
+            return
+        texture = load_full_texture(row["path"])
+        if texture is None:
+            self._toast("Couldn't open this image for editing")
+            return
+        self._edit_photo = row["path"]
+        self._edit_texture = texture
+        self._reset_editor()
+        self._edit_image.set_texture(texture)
+        self.edit_revealer.set_visible(True)
+        self.edit_revealer.set_reveal_child(True)
+
+    def _reset_editor(self):
+        for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation):
+            scale.set_value(0)
+        if self._edit_image is not None:
+            self._edit_image.reset()
+
+    def _close_editor(self):
+        self.edit_revealer.set_reveal_child(False)
+        self.edit_revealer.set_visible(False)
+        if self._edit_image is not None:
+            self._edit_image.set_texture(None)
+        self._edit_texture = None
+        self._edit_photo = None
+
+    def _save_edit(self):
+        if self._edit_texture is None or self._edit_photo is None:
+            return
+        stem = Path(self._edit_photo).stem
+        dialog = Gtk.FileDialog(initial_name=f"{stem} (edited).jpg")
+        dialog.save(self, None, self._save_edit_finish)
+
+    def _save_edit_finish(self, dialog, result):
+        try:
+            gfile = dialog.save_finish(result)
+        except GLib.Error:
+            return
+        if not gfile or not gfile.get_path() or self._edit_texture is None:
+            return
+        dest = gfile.get_path()
+        adj = self._edit_image.adjustments()
+        self._toast("Saving edited copy…")
+        # GSK rendering isn't thread-safe, so render on the main thread. Defer
+        # via idle so the toast paints first; a single image is quick.
+        GLib.idle_add(lambda: self._do_save(dest, adj))
+
+    def _do_save(self, dest, adj):
+        self._after_save(self._render_and_save(dest, adj), dest)
+        return False
+
+    def _render_and_save(self, dest, adj):
+        try:
+            out = render_adjusted_texture(self._edit_texture, adj)
+            if out is None:
+                return False
+            pixbuf = Gdk.pixbuf_get_from_texture(out)
+            if dest.lower().endswith(".png"):
+                pixbuf.savev(dest, "png", [], [])
+            else:
+                pixbuf.savev(dest, "jpeg", ["quality"], ["95"])
+            return True
+        except Exception:
+            return False
+
+    def _after_save(self, ok, dest):
+        if not ok:
+            self._toast("Couldn't save the edited copy")
+            return False
+        # If the copy landed inside a scanned folder, index it so it shows up.
+        for row in self.con.execute("SELECT path FROM folders").fetchall():
+            base = row["path"].rstrip("/") + "/"
+            if dest.startswith(base):
+                lib.scan_file(self.con, dest)
+                self._reload_all()
+                break
+        self._toast("Saved edited copy")
+        self._close_editor()
+        return False
+
     def _open_lightbox(self, photos, index):
         if not photos or not (0 <= index < len(photos)):
             return
@@ -1148,6 +1277,11 @@ class EaselWindow(Adw.ApplicationWindow):
             self._close_lightbox()
 
     def _on_key_pressed(self, _ctl, keyval, _keycode, _state):
+        if self._editor_visible():
+            if keyval == Gdk.KEY_Escape:
+                self._close_editor()
+                return True
+            return False
         if not self._lightbox_visible():
             return False
         if keyval == Gdk.KEY_Escape:

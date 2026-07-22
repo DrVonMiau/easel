@@ -188,6 +188,132 @@ def load_thumbnail(path, size):
     return texture
 
 
+# ---------- image adjustments (the editor) ----------
+
+# Rec.709 luma weights for the saturation matrix.
+_LUMA = (0.2126, 0.7152, 0.0722)
+
+
+def _adjust_color_matrix(brightness, contrast, saturation):
+    """Build the GSK colour matrix + offset for brightness/contrast/saturation.
+
+    brightness: additive, 0 = none. contrast/saturation: multiplicative factors,
+    1.0 = none. Composed as: out = k·(S·in) + (0.5·(1−k) + brightness), where S
+    is the saturation matrix and k the contrast factor.
+
+    GSK reads the 16 floats column-major (verified against the runtime), i.e.
+    floats[col*4 + row], so we assemble a row-major matrix and transpose."""
+    lr, lg, lb = _LUMA
+    s = saturation
+    sat = (
+        (lr * (1 - s) + s, lg * (1 - s),     lb * (1 - s)),
+        (lr * (1 - s),     lg * (1 - s) + s, lb * (1 - s)),
+        (lr * (1 - s),     lg * (1 - s),     lb * (1 - s) + s),
+    )
+    k = contrast
+    rows = [[k * sat[i][j] for j in range(3)] + [0.0] for i in range(3)]
+    rows.append([0.0, 0.0, 0.0, 1.0])  # alpha untouched
+    floats = [rows[r][c] for c in range(4) for r in range(4)]  # column-major
+    matrix = Graphene.Matrix()
+    matrix.init_from_float(floats)
+    o = 0.5 * (1 - k) + brightness
+    offset = Graphene.Vec4()
+    offset.init(o, o, o, 0.0)
+    return matrix, offset
+
+
+def _snapshot_adjusted(snapshot, texture, adj, out_w, out_h):
+    """Paint `texture` into `snapshot` at out_w×out_h with the adjustments in
+    `adj` (a dict of brightness/contrast/saturation/rotation) applied. Shared by
+    the live editor widget and the save renderer so preview and output match."""
+    tw, th = texture.get_width(), texture.get_height()
+    rot = adj["rotation"] % 360
+    matrix, offset = _adjust_color_matrix(
+        adj["brightness"], adj["contrast"], adj["saturation"])
+    scale = min(out_w / (th if rot in (90, 270) else tw),
+                out_h / (tw if rot in (90, 270) else th))
+    snapshot.push_color_matrix(matrix, offset)
+    snapshot.save()
+    snapshot.translate(Graphene.Point().init(out_w / 2, out_h / 2))
+    if rot:
+        snapshot.rotate(rot)
+    rw, rh = tw * scale, th * scale
+    snapshot.append_texture(texture, Graphene.Rect().init(-rw / 2, -rh / 2, rw, rh))
+    snapshot.restore()
+    snapshot.pop()
+
+
+def render_adjusted_texture(texture, adj):
+    """Render `texture` with `adj` applied, at full resolution, to a new
+    Gdk.Texture (used to save an edited copy). Returns None on failure."""
+    if texture is None:
+        return None
+    tw, th = texture.get_width(), texture.get_height()
+    rot = adj["rotation"] % 360
+    out_w, out_h = (th, tw) if rot in (90, 270) else (tw, th)
+    snapshot = Gtk.Snapshot()
+    _snapshot_adjusted(snapshot, texture, adj, out_w, out_h)
+    node = snapshot.to_node()
+    if node is None:
+        return None
+    renderer = Gsk.CairoRenderer()
+    try:
+        renderer.realize(None)
+        return renderer.render_texture(node, Graphene.Rect().init(0, 0, out_w, out_h))
+    except Exception:
+        return None
+    finally:
+        if renderer.is_realized():
+            renderer.unrealize()
+
+
+DEFAULT_ADJUSTMENTS = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0,
+                       "rotation": 0}
+
+
+class AdjustableImage(Gtk.Widget):
+    """Shows a texture with live brightness/contrast/saturation/rotation applied
+    via a GSK colour matrix — the editor's canvas. Adjustments only change how
+    it's drawn; the original pixels are never touched until the user saves."""
+
+    __gtype_name__ = "EaselAdjustableImage"
+
+    def __init__(self):
+        super().__init__()
+        self._texture = None
+        self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+
+    def set_texture(self, texture):
+        self._texture = texture
+        self.queue_draw()
+
+    def reset(self):
+        self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self.queue_draw()
+
+    def set_adjustment(self, name, value):
+        self._adj[name] = value
+        self.queue_draw()
+
+    def rotate(self, degrees):
+        self._adj["rotation"] = (self._adj["rotation"] + degrees) % 360
+        self.queue_draw()
+
+    def adjustments(self):
+        return dict(self._adj)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 320, -1, -1)
+
+    def do_snapshot(self, snapshot):
+        width, height = self.get_width(), self.get_height()
+        if self._texture is None or width <= 0 or height <= 0:
+            return
+        _snapshot_adjusted(snapshot, self._texture, self._adj, width, height)
+
+
 class _StripeArea(Gtk.Widget):
     """Fills its allocated area with a 45-degree repeating stripe pattern.
     The stripe color is the widget's CSS `color`, so it follows the theme."""
