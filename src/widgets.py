@@ -7,7 +7,9 @@ in the Flatpak runtime.
 """
 import math
 import os
+import queue
 import sys
+import threading
 from collections import OrderedDict
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gsk, Gtk
@@ -30,16 +32,105 @@ def _log_load_failure(path, exc):
 STRIPE_STEP = 7
 STRIPE_WIDTH = 2.4
 
-# Loading a photo grid means many thumbnails at once. Decoding each file at
-# full resolution into a Gtk.Picture would blow through memory (a single 12MP
-# photo is ~48 MB decoded) and stall the UI, so thumbnails are decoded to a
-# small bounded size and cached. Keyed by (path, size, mtime) so edits and
-# size changes reload; the cache is an LRU capped at _THUMB_CACHE_MAX entries.
+# Loading a photo grid means many thumbnails at once. Two things must stay
+# bounded or a large library takes the whole machine down:
+#   * memory — decoding each file at full resolution (a 12MP photo is ~48 MB
+#     decoded) and keeping it would exhaust RAM, so thumbnails are decoded to a
+#     small size and the decoded textures live in a bounded LRU cache.
+#   * concurrency — in the GNOME runtime each decode spawns a sandboxed glycin
+#     subprocess; doing thousands at once, or synchronously on the main thread,
+#     freezes the UI and floods the system. So decoding runs on a small fixed
+#     pool of worker threads, off the main thread.
+# Keyed by (path, size, mtime) so edits and size changes reload.
 _THUMB_CACHE = OrderedDict()
-_THUMB_CACHE_MAX = 512
+_THUMB_CACHE_MAX = 320
+_THUMB_CACHE_LOCK = threading.Lock()
 # Cap the decoded dimension regardless of requested swatch size (retina
 # headroom without unbounded memory).
-_THUMB_MAX_DIM = 640
+_THUMB_MAX_DIM = 512
+
+_LOADER_WORKERS = 3
+# LIFO: the most recently requested tiles (usually the ones just scrolled into
+# view) are decoded first.
+_load_queue = queue.LifoQueue()
+_workers_started = False
+_workers_lock = threading.Lock()
+
+
+def _cache_get(key):
+    with _THUMB_CACHE_LOCK:
+        texture = _THUMB_CACHE.get(key)
+        if texture is not None:
+            _THUMB_CACHE.move_to_end(key)
+        return texture
+
+
+def _cache_put(key, texture):
+    with _THUMB_CACHE_LOCK:
+        _THUMB_CACHE[key] = texture
+        while len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
+            _THUMB_CACHE.popitem(last=False)
+
+
+def _decode_scaled(path, size):
+    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
+    try:
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
+        return _texture_from_pixbuf(pixbuf)
+    except Exception as exc:
+        _log_load_failure(path, exc)
+        return None
+
+
+def _loader_worker():
+    while True:
+        path, size, key, wants, callback = _load_queue.get()
+        try:
+            # Skip work the caller no longer wants (tile recycled / scrolled
+            # away) so a big queue never forces thousands of pointless decodes.
+            if wants is not None and not wants():
+                continue
+            texture = _cache_get(key)
+            if texture is None:
+                texture = _decode_scaled(path, size)
+                if texture is not None:
+                    _cache_put(key, texture)
+            GLib.idle_add(callback, path, texture)
+        except Exception:
+            GLib.idle_add(callback, path, None)
+        finally:
+            _load_queue.task_done()
+
+
+def _ensure_workers():
+    global _workers_started
+    with _workers_lock:
+        if _workers_started:
+            return
+        _workers_started = True
+        for _ in range(_LOADER_WORKERS):
+            threading.Thread(target=_loader_worker, daemon=True).start()
+
+
+def request_thumbnail(path, size, wants, callback):
+    """Get a scaled thumbnail texture for `path`. Returns it immediately if
+    cached; otherwise returns None and schedules a bounded background decode,
+    calling callback(path, texture) on the main thread when ready (texture is
+    None if the file can't be decoded). `wants()` is checked right before
+    decoding so a recycled tile's stale request costs nothing."""
+    if not path:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    key = (path, size, mtime)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    _ensure_workers()
+    _load_queue.put((path, size, key, wants, callback))
+    return None
 
 
 def _texture_from_pixbuf(pixbuf):
@@ -86,23 +177,14 @@ def load_thumbnail(path, size):
     except OSError:
         return None
     key = (path, size, mtime)
-    cached = _THUMB_CACHE.get(key)
+    cached = _cache_get(key)
     if cached is not None:
-        _THUMB_CACHE.move_to_end(key)
         return cached
-    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
-    texture = None
-    try:
-        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
-        texture = _texture_from_pixbuf(pixbuf)
-    except Exception:
-        # load_full_texture logs its own failure if the fallback also fails.
-        texture = load_full_texture(path)
+    texture = _decode_scaled(path, size)
     if texture is None:
-        return None
-    _THUMB_CACHE[key] = texture
-    if len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
-        _THUMB_CACHE.popitem(last=False)
+        texture = load_full_texture(path)
+    if texture is not None:
+        _cache_put(key, texture)
     return texture
 
 
@@ -198,10 +280,27 @@ class Swatch(Gtk.Widget):
         self._label.set_label(text or "")
 
     def set_path(self, path):
-        # Decode a small thumbnail (not the full-resolution image) and fall
-        # back to the striped placeholder when the file can't be read/decoded,
-        # so unsupported formats show a placeholder instead of a blank tile.
-        texture = load_thumbnail(path, self._size)
+        # Track the current request so an async result that arrives after the
+        # swatch has been recycled to a different photo is ignored.
+        self._req_path = path
+        cached = request_thumbnail(
+            path, self._size,
+            wants=lambda p=path: getattr(self, "_req_path", None) == p,
+            callback=self._on_thumb_ready)
+        if cached is not None:
+            self._apply_texture(cached)
+        else:
+            # Show the placeholder immediately; the image fills in when decoded.
+            self._apply_texture(None)
+
+    def _on_thumb_ready(self, path, texture):
+        # Drop stale results for a since-recycled swatch.
+        if getattr(self, "_req_path", None) != path:
+            return False
+        self._apply_texture(texture)
+        return False
+
+    def _apply_texture(self, texture):
         has_image = texture is not None
         # Always set the paintable (None clears it cleanly) so a recycled
         # swatch never briefly shows the previous photo or keeps stale content.

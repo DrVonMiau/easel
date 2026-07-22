@@ -31,8 +31,15 @@ CREATE INDEX IF NOT EXISTS idx_ap_album ON album_photos(album_id);
 CREATE INDEX IF NOT EXISTS idx_ap_photo ON album_photos(photo_id);
 """
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic",
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif",
              ".gif", ".tiff", ".tif", ".bmp"}
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi",
+             ".3gp", ".mpg", ".mpeg", ".wmv", ".ogv"}
+MEDIA_EXT = IMAGE_EXT | VIDEO_EXT
+
+
+def is_video(path):
+    return Path(path).suffix.lower() in VIDEO_EXT
 
 
 def connect():
@@ -173,7 +180,7 @@ def scan_folder(con, folder, progress_cb=None):
     for root, dirs, fs in os.walk(folder):
         dirs[:] = [d for d in dirs if not _is_hidden(d)]  # don't descend hidden dirs
         for f in fs:
-            if not _is_hidden(f) and Path(f).suffix.lower() in IMAGE_EXT:
+            if not _is_hidden(f) and Path(f).suffix.lower() in MEDIA_EXT:
                 files.append(os.path.join(root, f))
     for i, path in enumerate(files):
         scan_file(con, path)
