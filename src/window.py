@@ -371,21 +371,18 @@ class EaselWindow(Adw.ApplicationWindow):
         return False
 
     def _apply_layout_metrics(self):
-        """5% margins; when the info panel is revealed it takes a fixed width on
-        the right and the paper shrinks to make room (as Lyre's player did)."""
+        """5% margins. The outer page margins stay put whether or not the info
+        panel is open — the panel slides in on the right (via the revealer) and
+        the paper reflows into the remaining width. Keeping margin_x fixed is
+        what makes the transition smooth: re-centering the paper on reveal made
+        the whole grid jump sideways."""
         width, height = self._surface_width, self._surface_height
         if width <= 0 or height <= 0:
             return
         margin_y = round(height * 0.05)
         margin_x = max(SPACE_L, round(width * 0.05))
         revealed = self.info_revealer.get_reveal_child()
-        if revealed:
-            gap = round(width * 0.04)
-            ideal_paper = round(width * 0.62)
-            centered = (width - ideal_paper - gap - self.PANEL_WIDTH) // 2
-            margin_x = max(margin_x, centered)
-        else:
-            gap = 0
+        gap = round(width * 0.04) if revealed else 0
         self.content_row.set_margin_start(margin_x)
         self.content_row.set_margin_end(margin_x)
         self.content_row.set_margin_top(0)

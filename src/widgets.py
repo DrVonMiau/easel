@@ -5,6 +5,7 @@ The stripes are drawn with GTK4's native Gtk.Snapshot/GSK API rather than
 Cairo, so this doesn't pull in a pycairo dependency that may not be present
 in the Flatpak runtime.
 """
+import hashlib
 import math
 import os
 import sys
@@ -48,6 +49,25 @@ _THUMB_CACHE_MAX = 320
 # headroom without unbounded memory).
 _THUMB_MAX_DIM = 512
 
+
+def _thumb_cache_dir():
+    """The on-disk directory where baked thumbnail PNGs live. Under
+    XDG_CACHE_HOME (writable in the Flatpak sandbox), created on demand."""
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    path = os.path.join(base, "easel", "thumbs")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
+def _thumb_cache_file(path, dim, rotation, mtime):
+    digest = hashlib.sha1(
+        f"{path}|{dim}|{rotation}|{mtime}".encode("utf-8", "surrogatepass")
+    ).hexdigest()
+    return os.path.join(_thumb_cache_dir(), digest + ".png")
+
 # LIFO stack: the most recently requested tiles (usually the ones just scrolled
 # into view) decode first. Processed on the main thread via an idle handler.
 _load_stack = []
@@ -75,13 +95,35 @@ def _cache_put(key, texture):
 
 
 def _decode_scaled(path, size, rotation=0):
+    """Decode `path` scaled to ~`size` (with any rotation baked in) and return a
+    renderable Gdk.Texture.
+
+    The scaled/rotated pixels are written to a PNG in the on-disk thumbnail
+    cache and the texture is loaded back with Gdk.Texture.new_from_filename.
+    That indirection is deliberate: in the GNOME runtime a texture built
+    directly from a pixbuf (MemoryTexture or new_for_pixbuf) never paints, while
+    new_from_filename always does — so every thumbnail goes through a real
+    file."""
     dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
     try:
-        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
-        rot = _ROTATIONS.get(rotation % 360)
-        if rot is not None:
-            pixbuf = pixbuf.rotate_simple(rot)
-        return _texture_from_pixbuf(pixbuf)
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cache_file = _thumb_cache_file(path, dim, rotation, mtime)
+    if not os.path.exists(cache_file):
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
+            rot = _ROTATIONS.get(rotation % 360)
+            if rot is not None:
+                pixbuf = pixbuf.rotate_simple(rot)
+            tmp = f"{cache_file}.{os.getpid()}.tmp"
+            pixbuf.savev(tmp, "png", [], [])
+            os.replace(tmp, cache_file)  # atomic: no half-written file is read
+        except Exception as exc:
+            _log_load_failure(path, exc)
+            return None
+    try:
+        return Gdk.Texture.new_from_filename(cache_file)
     except Exception as exc:
         _log_load_failure(path, exc)
         return None
@@ -132,32 +174,41 @@ def request_thumbnail(path, size, wants, callback, rotation=0):
     return None
 
 
-def _texture_from_pixbuf(pixbuf):
-    """A Gdk.Texture from a pixbuf. Uses Gdk.Texture.new_for_pixbuf: although
-    deprecated, it renders reliably in the GNOME runtime, whereas a hand-built
-    Gdk.MemoryTexture there stayed invisible (thumbnails/preview/rotated views
-    all blank while the plain new_from_filename path worked)."""
-    return Gdk.Texture.new_for_pixbuf(pixbuf)
-
-
 def load_full_texture(path, rotation=0):
     """A full-resolution Gdk.Texture for `path` (the lightbox), or None if it
-    can't be loaded, with an optional non-destructive rotation applied. Tries
-    GTK's own loaders first (they cover PNG/JPEG without needing gdk-pixbuf
-    loader modules) when unrotated, then falls back to gdk-pixbuf."""
+    can't be loaded, with an optional non-destructive rotation applied.
+
+    Unrotated, the file loads straight through Gdk.Texture.new_from_filename.
+    Rotated, the pixels are rotated with gdk-pixbuf and baked to a PNG in the
+    thumbnail cache, then loaded back with new_from_filename — because in the
+    GNOME runtime a texture built directly from a pixbuf never paints, so the
+    rotated view would otherwise come up blank."""
     if not path:
         return None
     rot = _ROTATIONS.get(rotation % 360)
     if rot is None:
         try:
             return Gdk.Texture.new_from_filename(path)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_load_failure(path, exc)
+            return None
     try:
-        pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-        if rot is not None:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cache_file = _thumb_cache_file(path, "full", rotation, mtime)
+    if not os.path.exists(cache_file):
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
             pixbuf = pixbuf.rotate_simple(rot)
-        return _texture_from_pixbuf(pixbuf)
+            tmp = f"{cache_file}.{os.getpid()}.tmp"
+            pixbuf.savev(tmp, "png", [], [])
+            os.replace(tmp, cache_file)
+        except Exception as exc:
+            _log_load_failure(path, exc)
+            return None
+    try:
+        return Gdk.Texture.new_from_filename(cache_file)
     except Exception as exc:
         _log_load_failure(path, exc)
         return None
