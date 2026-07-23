@@ -133,15 +133,11 @@ def request_thumbnail(path, size, wants, callback, rotation=0):
 
 
 def _texture_from_pixbuf(pixbuf):
-    """A Gdk.MemoryTexture copied from a pixbuf's pixels. We copy the bytes so
-    the texture owns its data (no dependence on the pixbuf's lifetime), and we
-    avoid the deprecated Gdk.Texture.new_for_pixbuf path."""
-    if not pixbuf.get_has_alpha():
-        pixbuf = pixbuf.add_alpha(False, 0, 0, 0)
-    data = GLib.Bytes.new(pixbuf.get_pixels())
-    return Gdk.MemoryTexture.new(
-        pixbuf.get_width(), pixbuf.get_height(),
-        Gdk.MemoryFormat.R8G8B8A8, data, pixbuf.get_rowstride())
+    """A Gdk.Texture from a pixbuf. Uses Gdk.Texture.new_for_pixbuf: although
+    deprecated, it renders reliably in the GNOME runtime, whereas a hand-built
+    Gdk.MemoryTexture there stayed invisible (thumbnails/preview/rotated views
+    all blank while the plain new_from_filename path worked)."""
+    return Gdk.Texture.new_for_pixbuf(pixbuf)
 
 
 def load_full_texture(path, rotation=0):

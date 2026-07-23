@@ -630,6 +630,13 @@ class EaselWindow(Adw.ApplicationWindow):
         elif n_press == 1:
             if self._single_click_source:
                 GLib.source_remove(self._single_click_source)
+                self._single_click_source = 0
+            # Clicking the already-open photo again de-selects it and closes
+            # the panel (a toggle).
+            if (self._info_photo_id == photo.id
+                    and self.info_revealer.get_reveal_child()):
+                self._close_info()
+                return
             self._select_tile(tile)  # instant highlight; info opens after the tap window
             pid = photo.id
             self._single_click_source = GLib.timeout_add(230, lambda: self._single_fire(pid))
@@ -1083,13 +1090,27 @@ class EaselWindow(Adw.ApplicationWindow):
     def _rotate_info(self, delta):
         if self._info_photo_id is None:
             return
-        row = lib.get_photo(self.con, self._info_photo_id)
+        pid = self._info_photo_id
+        row = lib.get_photo(self.con, pid)
         if not row:
             return
         new = (self._photo_rotation(row) + delta) % 360
-        lib.set_rotation(self.con, self._info_photo_id, new)
+        lib.set_rotation(self.con, pid, new)
         self._info_preview.set_path(row["path"], rotation=new)
-        self._reload_all()  # refresh grids/lightbox with the new orientation
+        # Update just this photo's orientation in place — a full reload would
+        # repopulate every grid and could disturb scroll/selection.
+        for lst in (self._photos_all, self._visible_photos, self._visible_favs,
+                    self._detail_photos):
+            for p in lst:
+                if p.id == pid:
+                    p.rotation = new
+        for store in (self.photo_store, self.fav_store, self.detail_store):
+            for i in range(store.get_n_items()):
+                if store.get_item(i).id == pid:
+                    item = store.get_item(i)
+                    store.remove(i)
+                    store.insert(i, item)  # re-binds this tile with the new rotation
+                    break
 
     def _on_info_add(self, button):
         if self._info_photo_id is None:
@@ -1320,7 +1341,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _update_lightbox_fav(self, photo):
         row = lib.get_photo(self.con, photo.id)
         fav = bool(row["favorite"]) if row else photo.favorite
-        self.lightbox_fav_btn.set_icon_name("starred-symbolic" if fav else "non-starred-symbolic")
+        self.lightbox_fav_btn.set_icon_name("easel-heart-symbolic")
         if fav:
             self.lightbox_fav_btn.add_css_class("faved")
         else:

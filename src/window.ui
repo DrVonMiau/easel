@@ -757,7 +757,7 @@
                         <property name="spacing">4</property>
                         <child>
                           <object class="GtkButton" id="lightbox_fav_btn">
-                            <property name="icon-name">non-starred-symbolic</property>
+                            <property name="icon-name">easel-heart-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Favourite</property>
                             <property name="valign">center</property>
                             <style>
