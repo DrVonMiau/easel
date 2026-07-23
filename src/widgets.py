@@ -319,87 +319,28 @@ class AdjustableImage(Gtk.Widget):
         _snapshot_adjusted(snapshot, self._texture, self._adj, width, height)
 
 
-class _StripeArea(Gtk.Widget):
-    """Fills its allocated area with a 45-degree repeating stripe pattern.
-    The stripe color is the widget's CSS `color`, so it follows the theme."""
-
-    __gtype_name__ = "EaselStripeArea"
-
-    def do_snapshot(self, snapshot):
-        width = self.get_width()
-        height = self.get_height()
-        if width <= 0 or height <= 0:
-            return
-        rgba = self.get_color()
-        snapshot.push_clip(Graphene.Rect().init(0, 0, width, height))
-        snapshot.save()
-        snapshot.translate(Graphene.Point().init(width / 2, height / 2))
-        snapshot.rotate(45)
-        diag = math.hypot(width, height)
-        y = -diag
-        while y < diag:
-            stripe = Graphene.Rect().init(-diag, y, diag * 2, STRIPE_WIDTH)
-            snapshot.append_color(rgba, stripe)
-            y += STRIPE_STEP
-        snapshot.restore()
-        snapshot.pop()
-
-
 class Swatch(Gtk.Widget):
-    """A square artwork swatch: shows a Gtk.Picture when a path is set,
-    otherwise a diagonal-striped placeholder with a small caption chip.
+    """A square artwork swatch: draws the thumbnail texture (cover-cropped) when
+    a path is set, otherwise a diagonal-striped placeholder.
 
-    Implemented as a plain widget with manual measure/allocate so it is
-    always square, no matter the aspect ratio of the image inside (the
-    picture crops via content-fit cover and is clipped to the corners).
-    """
+    The texture is painted directly in do_snapshot rather than via a child
+    Gtk.Picture: in the GNOME runtime a Gtk.Picture child inside a custom widget
+    doesn't paint, whereas self-drawn content (like the editor canvas) does.
+    Overflow-hidden + the .swatch CSS border-radius round the corners."""
 
     __gtype_name__ = "EaselSwatch"
 
-    def __init__(self, placeholder_text, size=128):
+    def __init__(self, placeholder_text="", size=128):
         super().__init__()
         self._size = size
+        self._texture = None
+        self._placeholder_text = placeholder_text  # kept for API compatibility
         self.set_overflow(Gtk.Overflow.HIDDEN)
         self.add_css_class("swatch")
-        self._placeholder_text = placeholder_text
-
-        self._picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER)
-        self._picture.set_parent(self)
-
-        self._area = _StripeArea()
-        self._area.set_parent(self)
-
-        self._label = Gtk.Label(label=placeholder_text or "")
-        self._label.add_css_class("swatch-caption")
-        self._label.set_parent(self)
-
         self.set_path(None)
-        # PyGObject doesn't reliably invoke do_dispose overrides, so unparent
-        # the manually-parented children on ::destroy instead.
-        self.connect("destroy", self._on_destroy)
-
-    def _on_destroy(self, *_args):
-        for child in (self._picture, self._area, self._label):
-            if child.get_parent() is self:
-                child.unparent()
 
     def do_measure(self, orientation, for_size):
-        for child in (self._picture, self._area, self._label):
-            child.measure(orientation, -1)
         return (self._size, self._size, -1, -1)
-
-    def do_size_allocate(self, width, height, baseline):
-        for child in (self._picture, self._area):
-            if child.get_visible():
-                child.allocate(width, height, -1, None)
-        if self._label.get_visible():
-            _lmin, lnat, _b1, _b2 = self._label.measure(Gtk.Orientation.HORIZONTAL, -1)
-            label_w = min(lnat, width)
-            _hmin, hnat, _b3, _b4 = self._label.measure(Gtk.Orientation.VERTICAL, label_w)
-            transform = Gsk.Transform.new().translate(
-                Graphene.Point().init((width - label_w) / 2, (height - hnat) / 2)
-            )
-            self._label.allocate(label_w, hnat, -1, transform)
 
     def set_size(self, size):
         if size != self._size:
@@ -408,7 +349,6 @@ class Swatch(Gtk.Widget):
 
     def set_placeholder(self, text):
         self._placeholder_text = text
-        self._label.set_label(text or "")
 
     def set_path(self, path, rotation=0):
         # Track the current request (path + rotation) so a result that arrives
@@ -418,7 +358,7 @@ class Swatch(Gtk.Widget):
 
         def on_ready(_path, texture, want=token):
             if getattr(self, "_req_token", None) == want:
-                self._apply_texture(texture)
+                self._set_texture(texture)
             return False
 
         cached = request_thumbnail(
@@ -426,14 +366,35 @@ class Swatch(Gtk.Widget):
             wants=lambda want=token: getattr(self, "_req_token", None) == want,
             callback=on_ready, rotation=rotation)
         # Cached hit paints now; otherwise show the placeholder until it decodes.
-        self._apply_texture(cached)
+        self._set_texture(cached)
 
-    def _apply_texture(self, texture):
-        has_image = texture is not None
-        # Always set the paintable (None clears it cleanly) so a recycled
-        # swatch never briefly shows the previous photo or keeps stale content.
-        self._picture.set_paintable(texture)
-        self._picture.set_visible(has_image)
-        self._area.set_visible(not has_image)
-        self._label.set_visible(not has_image and bool(self._placeholder_text))
-        self.queue_allocate()
+    def _set_texture(self, texture):
+        self._texture = texture
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot):
+        width, height = self.get_width(), self.get_height()
+        if width <= 0 or height <= 0:
+            return
+        if self._texture is not None:
+            tw, th = self._texture.get_width(), self._texture.get_height()
+            if tw > 0 and th > 0:
+                # content-fit: cover — scale to fill, centre-crop (overflow
+                # hidden clips to the rounded corners).
+                scale = max(width / tw, height / th)
+                dw, dh = tw * scale, th * scale
+                snapshot.append_texture(
+                    self._texture,
+                    Graphene.Rect().init((width - dw) / 2, (height - dh) / 2, dw, dh))
+            return
+        # Striped placeholder, drawn in the widget's CSS `color`.
+        rgba = self.get_color()
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(width / 2, height / 2))
+        snapshot.rotate(45)
+        diag = math.hypot(width, height)
+        y = -diag
+        while y < diag:
+            snapshot.append_color(rgba, Graphene.Rect().init(-diag, y, diag * 2, STRIPE_WIDTH))
+            y += STRIPE_STEP
+        snapshot.restore()
