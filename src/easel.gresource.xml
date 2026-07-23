@@ -6,5 +6,6 @@
     <file compressed="true">style.css</file>
     <file>icons/scalable/actions/easel-more-symbolic.svg</file>
     <file>icons/scalable/actions/easel-sort-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-heart-symbolic.svg</file>
   </gresource>
 </gresources>

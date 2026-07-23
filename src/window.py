@@ -199,6 +199,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._thumb_size = self.settings.get_int("thumb-size")
         self._info_photo_id = None
         self._info_preview = None
+        self._selected_tile = None
         self._single_click_source = 0
 
         self._lightbox_photos = []
@@ -515,19 +516,15 @@ class EaselWindow(Adw.ApplicationWindow):
         swatch.add_css_class("card-swatch")
         overlay.set_child(swatch)
 
-        heart = Gtk.Button(icon_name="non-starred-symbolic", halign=Gtk.Align.START,
-                           valign=Gtk.Align.START, margin_top=6, margin_start=6,
-                           tooltip_text="Favourite", css_classes=["tile-heart"])
-        heart.set_visible(False)
-        heart.set_cursor(POINTER_CURSOR)
-        heart.connect("clicked", lambda _b: self._toggle_fav(box._photo.id))
-        overlay.add_overlay(heart)
-
-        star = Gtk.Image(icon_name="starred-symbolic", halign=Gtk.Align.START,
-                         valign=Gtk.Align.END, margin_start=8, margin_bottom=8,
-                         css_classes=["photo-star"])
-        star.set_visible(False)
-        overlay.add_overlay(star)
+        # Single favourite control at the bottom-right: shown on hover or when
+        # favourited; clicking it colours in place (it never moves).
+        fav = Gtk.Button(icon_name="easel-heart-symbolic", halign=Gtk.Align.END,
+                         valign=Gtk.Align.END, margin_bottom=12, margin_end=12,
+                         tooltip_text="Favourite", css_classes=["tile-fav"])
+        fav.set_visible(False)
+        fav.set_cursor(POINTER_CURSOR)
+        fav.connect("clicked", lambda _b: self._toggle_fav(box._photo.id))
+        overlay.add_overlay(fav)
 
         # Centered play badge marks videos (which don't get a decoded thumbnail).
         play = Gtk.Image(icon_name="media-playback-start-symbolic",
@@ -537,21 +534,21 @@ class EaselWindow(Adw.ApplicationWindow):
         overlay.add_overlay(play)
 
         menu_btn = Gtk.Button(icon_name="easel-more-symbolic", halign=Gtk.Align.END,
-                              valign=Gtk.Align.START, margin_top=6, margin_end=6,
+                              valign=Gtk.Align.START, margin_top=12, margin_end=12,
                               tooltip_text="More", css_classes=["card-menu-btn"])
         menu_btn.set_visible(False)
         menu_btn.set_cursor(POINTER_CURSOR)
         overlay.add_overlay(menu_btn)
 
         box.append(overlay)
-        box.swatch, box.heart, box.star, box.menu_btn = swatch, heart, star, menu_btn
+        box.swatch, box.fav, box.menu_btn = swatch, fav, menu_btn
         box.play = play
         box._photo = None
         box._source = "photos"
         box._menu_open = False
 
         motion = Gtk.EventControllerMotion()
-        motion.connect("enter", lambda *_a: (box.heart.set_visible(True),
+        motion.connect("enter", lambda *_a: (box.fav.set_visible(True),
                                              box.menu_btn.set_visible(True)))
         motion.connect("leave", lambda *_a: self._tile_unhover(box))
         box.add_controller(motion)
@@ -576,8 +573,14 @@ class EaselWindow(Adw.ApplicationWindow):
         box.connect("query-tooltip", self._on_tile_tooltip)
         return box
 
+    @staticmethod
+    def _tile_faved(box):
+        return box._photo is not None and box._photo.favorite
+
     def _tile_unhover(self, box):
-        box.heart.set_visible(False)
+        # The heart stays visible for favourited photos; the menu button hides
+        # unless its popover is open.
+        box.fav.set_visible(self._tile_faved(box))
         if not box._menu_open:
             box.menu_btn.set_visible(False)
 
@@ -585,7 +588,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box._menu_open = False
         if not box._motion.get_property("contains-pointer"):
             box.menu_btn.set_visible(False)
-            box.heart.set_visible(False)
+            box.fav.set_visible(self._tile_faved(box))
 
     def _bind_tile(self, tile, photo, source_name):
         tile._photo = photo
@@ -598,8 +601,19 @@ class EaselWindow(Adw.ApplicationWindow):
         tile.set_size_request(self._thumb_size + 12, -1)
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
-        tile.star.set_visible(photo.favorite)
         tile.play.set_visible(photo.is_video)
+        # Favourite heart: shown (gold) when faved; hover reveals it otherwise.
+        tile.fav.set_visible(photo.favorite or tile._motion.get_property("contains-pointer"))
+        if photo.favorite:
+            tile.fav.add_css_class("faved")
+        else:
+            tile.fav.remove_css_class("faved")
+        # Highlight the tile whose photo is open in the info panel.
+        if photo.id == self._info_photo_id:
+            tile.add_css_class("tile-selected")
+            self._selected_tile = tile
+        else:
+            tile.remove_css_class("tile-selected")
 
     def _tile_pressed(self, n_press, tile):
         photo = tile._photo
@@ -616,6 +630,7 @@ class EaselWindow(Adw.ApplicationWindow):
         elif n_press == 1:
             if self._single_click_source:
                 GLib.source_remove(self._single_click_source)
+            self._select_tile(tile)  # instant highlight; info opens after the tap window
             pid = photo.id
             self._single_click_source = GLib.timeout_add(230, lambda: self._single_fire(pid))
 
@@ -623,6 +638,19 @@ class EaselWindow(Adw.ApplicationWindow):
         self._single_click_source = 0
         self._show_info(photo_id)
         return False
+
+    def _select_tile(self, tile):
+        """Move the blue selection ring to `tile` (or clear it with None)."""
+        if self._selected_tile is tile:
+            return
+        if self._selected_tile is not None:
+            try:
+                self._selected_tile.remove_css_class("tile-selected")
+            except Exception:
+                pass
+        self._selected_tile = tile
+        if tile is not None:
+            tile.add_css_class("tile-selected")
 
     def _on_tile_tooltip(self, widget, _x, _y, _keyboard, tooltip):
         photo = getattr(widget, "_photo", None)
@@ -875,6 +903,9 @@ class EaselWindow(Adw.ApplicationWindow):
             self._toggle_fav(item_id)
             return
         if name == "add-to-album":
+            if lib.in_album(self.con, data["album"], item_id):
+                self._toast("This photo is already in the album")
+                return
             lib.add_to_album(self.con, data["album"], [item_id])
             album = lib.get_album(self.con, data["album"])
             self._toast(f'Added to "{album["title"]}"' if album else "Added to album")
@@ -1075,6 +1106,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_revealer.set_reveal_child(False)
         self.info_revealer.set_visible(False)
         self._info_photo_id = None
+        self._select_tile(None)
         self._apply_layout_metrics()
 
     def _info_fullscreen(self):

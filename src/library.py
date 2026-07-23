@@ -127,6 +127,12 @@ def remove_from_album(con, album_id, photo_id):
     con.commit()
 
 
+def in_album(con, album_id, photo_id):
+    return con.execute(
+        "SELECT 1 FROM album_photos WHERE album_id=? AND photo_id=?", (album_id, photo_id)
+    ).fetchone() is not None
+
+
 def _date_taken(path):
     """Best-effort capture date. EXIF reading (GExiv2/Pillow) can slot in
     here later; filesystem mtime is a fine placeholder for now."""
