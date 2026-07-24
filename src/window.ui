@@ -576,7 +576,7 @@
                                     <property name="margin-bottom">1</property>
                                     <property name="margin-start">32</property>
                                     <property name="margin-end">32</property>
-                                    <property name="vexpand">true</property>
+                                    <property name="valign">start</property>
                                     <style>
                                       <class name="card-grid"/>
                                     </style>

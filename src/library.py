@@ -6,7 +6,9 @@ albums on top of that — so album membership is many-to-many (album_photos).
 The folder-watching and pruning shape carries over from Lyre's music library.
 """
 import os
+import struct
 import sqlite3
+import time
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "easel"
@@ -133,9 +135,119 @@ def in_album(con, album_id, photo_id):
     ).fetchone() is not None
 
 
+# EXIF tags we care about, in the order we prefer them.
+_EXIF_DATE_TAGS = (0x9003, 0x9004, 0x0132)  # DateTimeOriginal, DateTimeDigitized, DateTime
+
+
+def _parse_exif_datetime(value):
+    """Turn an EXIF datetime string ('YYYY:MM:DD HH:MM:SS') into a POSIX
+    timestamp (interpreted as local time), or None if it doesn't parse."""
+    value = value.split("\x00", 1)[0].strip()
+    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y:%m:%d"):
+        try:
+            return time.mktime(time.strptime(value, fmt))
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+def _exif_datetime(path):
+    """The photo's capture date from its EXIF metadata, as a POSIX timestamp,
+    or None if the file has no readable EXIF date. A small self-contained JPEG
+    EXIF reader — no gdk-pixbuf/glycin (which fails in the sandbox) and no extra
+    dependency."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(256 * 1024)
+    except OSError:
+        return None
+    if head[:2] != b"\xff\xd8":  # not a JPEG
+        return None
+    # Walk JPEG marker segments to find APP1 (0xFFE1) carrying "Exif\0\0".
+    i = 2
+    exif = None
+    while i + 4 <= len(head):
+        if head[i] != 0xFF:
+            break
+        marker = head[i + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", head[i + 2:i + 4])[0]
+        seg = head[i + 4:i + 2 + seg_len]
+        if marker == 0xE1 and seg[:6] == b"Exif\x00\x00":
+            exif = seg[6:]
+            break
+        if marker == 0xDA:  # start of scan — no metadata past here
+            break
+        i += 2 + seg_len
+    if not exif or len(exif) < 8:
+        return None
+    # TIFF header inside the EXIF block: byte order + magic + IFD0 offset.
+    bo = "<" if exif[:2] == b"II" else ">" if exif[:2] == b"MM" else None
+    if bo is None:
+        return None
+
+    def u16(off):
+        return struct.unpack(bo + "H", exif[off:off + 2])[0]
+
+    def u32(off):
+        return struct.unpack(bo + "I", exif[off:off + 4])[0]
+
+    def read_ifd(offset, found):
+        if offset <= 0 or offset + 2 > len(exif):
+            return None
+        count = u16(offset)
+        entry = offset + 2
+        sub_ifd = None
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            tag = u16(entry)
+            typ = u16(entry + 2)
+            val_off = entry + 8
+            if tag in _EXIF_DATE_TAGS and typ == 2:  # ASCII
+                n = u32(entry + 4)
+                str_off = u32(val_off) if n > 4 else val_off
+                if 0 <= str_off <= len(exif):
+                    raw = exif[str_off:str_off + min(n, 32)].split(b"\x00", 1)[0]
+                    ts = _parse_exif_datetime(raw.decode("ascii", "ignore"))
+                    if ts is not None:
+                        found[tag] = ts
+            elif tag == 0x8769 and typ == 4:  # Exif sub-IFD pointer
+                sub_ifd = u32(val_off)
+            entry += 12
+        return sub_ifd
+
+    found = {}
+    sub = read_ifd(u32(4), found)
+    if sub is not None:
+        read_ifd(sub, found)
+    for tag in _EXIF_DATE_TAGS:
+        if tag in found:
+            return found[tag]
+    return None
+
+
+def _file_created(path):
+    """Filesystem creation (birth) time if the platform exposes it, else None."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    bt = getattr(st, "st_birthtime", None)
+    return bt if bt else None
+
+
 def _date_taken(path):
-    """Best-effort capture date. EXIF reading (GExiv2/Pillow) can slot in
-    here later; filesystem mtime is a fine placeholder for now."""
+    """Best capture date for a photo: the EXIF DateTimeOriginal if present,
+    otherwise the file's creation (birth) time, otherwise its mtime."""
+    ts = _exif_datetime(path)
+    if ts is not None:
+        return ts
+    ts = _file_created(path)
+    if ts is not None:
+        return ts
     try:
         return os.path.getmtime(path)
     except OSError:
@@ -149,11 +261,20 @@ def scan_file(con, path):
     except OSError:
         return
     album_id = get_or_create_folder_album(con, os.path.dirname(path))
-    existing = con.execute("SELECT id, mtime FROM photos WHERE path=?", (path,)).fetchone()
+    existing = con.execute(
+        "SELECT id, mtime, date_taken FROM photos WHERE path=?", (path,)).fetchone()
     if existing:
         photo_id = existing["id"]
         if existing["mtime"] != mtime:
             con.execute("UPDATE photos SET mtime=? WHERE id=?", (mtime, photo_id))
+        # Refresh the capture date from EXIF, but only when the stored date is
+        # still the old auto-derived mtime value — never clobber a date the user
+        # set by hand.
+        if existing["date_taken"] in (None, existing["mtime"]):
+            fresh = _date_taken(path)
+            if fresh != existing["date_taken"]:
+                con.execute("UPDATE photos SET date_taken=? WHERE id=?",
+                            (fresh, photo_id))
     else:
         photo_id = con.execute(
             "INSERT INTO photos(path, mtime, date_taken) VALUES (?,?,?)",
