@@ -11,7 +11,7 @@ import os
 import sys
 from collections import OrderedDict
 
-from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gsk, Gtk
+from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk
 
 # Report the first few image-load failures to stderr, with the reason, so a
 # problem that only shows up in the packaged runtime (a permission error vs a
@@ -74,11 +74,62 @@ _load_stack = []
 _load_idle_id = 0
 _LOAD_BATCH = 2  # decodes per idle cycle — small, so the UI stays responsive
 
-_ROTATIONS = {
-    90: GdkPixbuf.PixbufRotation.CLOCKWISE,
-    180: GdkPixbuf.PixbufRotation.UPSIDEDOWN,
-    270: GdkPixbuf.PixbufRotation.COUNTERCLOCKWISE,
-}
+def _render_texture(texture, rotation=0, max_dim=None):
+    """Return a new Gdk.Texture that is `texture` optionally rotated by a
+    multiple of 90° and scaled so its longest side is at most `max_dim`
+    (no upscaling; max_dim=None keeps full size).
+
+    Done entirely with GSK — a snapshot rendered through Gsk.CairoRenderer —
+    rather than gdk-pixbuf, because in the GNOME 49 runtime gdk-pixbuf decoding
+    is delegated to a glycin subprocess that fails ('Loader process exited early
+    with status 1'), while Gdk.Texture.new_from_filename works. So we decode the
+    source with new_from_filename and reshape it here."""
+    tw, th = texture.get_width(), texture.get_height()
+    if tw <= 0 or th <= 0:
+        return None
+    scale = 1.0
+    if max_dim:
+        scale = min(max_dim / tw, max_dim / th, 1.0)
+    sw, sh = max(1, round(tw * scale)), max(1, round(th * scale))
+    rot = rotation % 360
+    out_w, out_h = (sh, sw) if rot in (90, 270) else (sw, sh)
+    snapshot = Gtk.Snapshot()
+    snapshot.save()
+    snapshot.translate(Graphene.Point().init(out_w / 2, out_h / 2))
+    if rot:
+        snapshot.rotate(rot)
+    snapshot.append_scaled_texture(
+        texture, Gsk.ScalingFilter.TRILINEAR,
+        Graphene.Rect().init(-sw / 2, -sh / 2, sw, sh))
+    snapshot.restore()
+    node = snapshot.to_node()
+    if node is None:
+        return None
+    renderer = Gsk.CairoRenderer()
+    try:
+        renderer.realize(None)
+        return renderer.render_texture(
+            node, Graphene.Rect().init(0, 0, out_w, out_h))
+    except Exception:
+        return None
+    finally:
+        if renderer.is_realized():
+            renderer.unrealize()
+
+
+def _texture_to_cache(texture, cache_file):
+    """Write `texture` to `cache_file` (atomically) as PNG. Returns True on
+    success. The bytes are produced with Gdk.Texture.save_to_png_bytes so no
+    gdk-pixbuf save path is involved."""
+    try:
+        data = texture.save_to_png_bytes()
+        tmp = f"{cache_file}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data.get_data())
+        os.replace(tmp, cache_file)  # atomic: a half-written file is never read
+        return True
+    except Exception:
+        return False
 
 
 def _cache_get(key):
@@ -96,14 +147,13 @@ def _cache_put(key, texture):
 
 def _decode_scaled(path, size, rotation=0):
     """Decode `path` scaled to ~`size` (with any rotation baked in) and return a
-    renderable Gdk.Texture.
+    renderable Gdk.Texture, or None if it can't be loaded.
 
-    The scaled/rotated pixels are written to a PNG in the on-disk thumbnail
-    cache and the texture is loaded back with Gdk.Texture.new_from_filename.
-    That indirection is deliberate: in the GNOME runtime a texture built
-    directly from a pixbuf (MemoryTexture or new_for_pixbuf) never paints, while
-    new_from_filename always does — so every thumbnail goes through a real
-    file."""
+    The source is decoded with Gdk.Texture.new_from_filename (the only decode
+    path that works in the GNOME 49 runtime — gdk-pixbuf's glycin subprocess
+    fails there), scaled/rotated via GSK, and the result is cached to a small
+    PNG on disk. That PNG is then loaded back with new_from_filename so what the
+    grid paints is always a plain file-backed texture."""
     dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
     try:
         mtime = os.path.getmtime(path)
@@ -112,15 +162,12 @@ def _decode_scaled(path, size, rotation=0):
     cache_file = _thumb_cache_file(path, dim, rotation, mtime)
     if not os.path.exists(cache_file):
         try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dim, dim, True)
-            rot = _ROTATIONS.get(rotation % 360)
-            if rot is not None:
-                pixbuf = pixbuf.rotate_simple(rot)
-            tmp = f"{cache_file}.{os.getpid()}.tmp"
-            pixbuf.savev(tmp, "png", [], [])
-            os.replace(tmp, cache_file)  # atomic: no half-written file is read
+            src = Gdk.Texture.new_from_filename(path)
         except Exception as exc:
             _log_load_failure(path, exc)
+            return None
+        scaled = _render_texture(src, rotation, max_dim=dim)
+        if scaled is None or not _texture_to_cache(scaled, cache_file):
             return None
     try:
         return Gdk.Texture.new_from_filename(cache_file)
@@ -179,33 +226,27 @@ def load_full_texture(path, rotation=0):
     can't be loaded, with an optional non-destructive rotation applied.
 
     Unrotated, the file loads straight through Gdk.Texture.new_from_filename.
-    Rotated, the pixels are rotated with gdk-pixbuf and baked to a PNG in the
-    thumbnail cache, then loaded back with new_from_filename — because in the
-    GNOME runtime a texture built directly from a pixbuf never paints, so the
-    rotated view would otherwise come up blank."""
+    Rotated, the source texture is rotated via GSK and baked to a PNG in the
+    cache, then loaded back with new_from_filename — a GSK-rendered texture is
+    not guaranteed to paint on screen in this runtime, whereas a file-backed one
+    always does."""
     if not path:
         return None
-    rot = _ROTATIONS.get(rotation % 360)
-    if rot is None:
-        try:
-            return Gdk.Texture.new_from_filename(path)
-        except Exception as exc:
-            _log_load_failure(path, exc)
-            return None
+    try:
+        src = Gdk.Texture.new_from_filename(path)
+    except Exception as exc:
+        _log_load_failure(path, exc)
+        return None
+    if rotation % 360 == 0:
+        return src
     try:
         mtime = os.path.getmtime(path)
     except OSError:
-        return None
+        mtime = 0
     cache_file = _thumb_cache_file(path, "full", rotation, mtime)
     if not os.path.exists(cache_file):
-        try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-            pixbuf = pixbuf.rotate_simple(rot)
-            tmp = f"{cache_file}.{os.getpid()}.tmp"
-            pixbuf.savev(tmp, "png", [], [])
-            os.replace(tmp, cache_file)
-        except Exception as exc:
-            _log_load_failure(path, exc)
+        rotated = _render_texture(src, rotation, max_dim=None)
+        if rotated is None or not _texture_to_cache(rotated, cache_file):
             return None
     try:
         return Gdk.Texture.new_from_filename(cache_file)
