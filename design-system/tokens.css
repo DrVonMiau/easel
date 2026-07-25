@@ -1,0 +1,51 @@
+/* Miau Design System — tokens for GTK4 + libadwaita apps.
+ *
+ * Drop this at the top of an app's style.css. It defines ONLY the accent
+ * tokens and a few shared metrics; everything neutral comes from libadwaita's
+ * named colors (@window_bg_color, @view_bg_color, @card_bg_color,
+ * @window_fg_color, …) so the app follows the user's light/dark theme.
+ *
+ * GTK CSS has no variables/custom-properties or arithmetic. So:
+ *   - colors are @define-color (usable as @name and in alpha()/shade()/mix())
+ *   - spacing/radii/type are conventions you type literally; the comments below
+ *     are the lookup table. Keep values in sync with tokens.json.
+ *
+ * Hand-generated from tokens.json v0.1.0. If you change one, change the other.
+ */
+
+/* ---------- accent colors (the only colors we define) ---------- */
+@define-color easel_blue        #4f6ad9;
+@define-color easel_blue_light  #8fa2ec;   /* tuned for dark backgrounds */
+@define-color easel_gold        #c1962b;
+@define-color easel_gold_light  #ddb964;
+@define-color easel_text_soft       #5a6a9e;
+@define-color easel_text_soft_dark  #a7b2da;
+
+/* Selection / primary / focus all use @easel_blue.
+ * Favourites use @easel_gold (product) — see tokens.json for the Figma divergence. */
+
+/* ---------- spacing scale (px) — type literally ----------
+ *   xxs 2   xs 4   s 6   m 8   l 12   xl 16   xxl 24   xxxl 32
+ * Page margins: 5% of window width (min ~ xl). Info panel: 300px fixed.
+ */
+
+/* ---------- radii (px) by role — type literally ----------
+ *   xs 7    small chips / grouped headers
+ *   sm 8    add/edit action buttons
+ *   md 9    tab pills, badges
+ *   lg 10   photo swatch / tile
+ *   xl 12   tab container, info-panel image, primary button (11–12)
+ *   xxl 14  paper surface (top corners: 14 14 0 0)
+ *   full 9999   circular buttons, slider knob, heart backdrop
+ */
+
+/* ---------- type ----------
+ *   Chrome (tabs, filenames, detail rows): monospace.
+ *   Sizes: caption 12 · body/label 13 · heading 17 · title 22
+ *   Weights: regular 400 · medium 500 · bold 700
+ */
+
+/* ---------- elevation ----------
+ *   paper shadow:  box-shadow: 0 6px 24px alpha(#000, 0.35);
+ *   focus ring:    box-shadow: 0 0 0 3px @easel_blue;
+ */
