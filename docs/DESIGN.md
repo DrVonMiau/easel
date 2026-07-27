@@ -99,11 +99,12 @@ Weights: 400 (regular) · 500 (medium) · 600 (semibold).
 
 ### Icons
 
-[Feather](https://feathericons.com/) — stroke-based, 2px, round caps/joins —
-shipped as recolorable `-symbolic` resources under
-`src/icons/scalable/actions/` (registered in `easel.gresource.xml`). GTK tints
-them to each widget's foreground colour, so one file serves light and dark.
-Sizes: **18px** in the titlebar, **20px** for info-panel actions, 16px
+A Feather-derived set, exported with **outline-expanded** strokes (filled
+paths rather than `stroke`), shipped as recolorable `-symbolic` resources
+under `src/icons/scalable/actions/` (registered in `easel.gresource.xml`). GTK
+tints them to each widget's foreground colour by alpha mask, so one file
+serves light and dark and the outline-expanded form recolours cleanly. Sizes:
+**18px** in the titlebar, **20px** for info-panel and editor actions, 16px
 default elsewhere.
 
 ### Elevation
@@ -142,7 +143,7 @@ these before inventing new styling.
 | Quick action | `.info-action` / `.info-fs-btn` | `GtkButton` | Five equal-width filled buttons (44px, radius 10): grey secondary + blue primary (fullscreen) |
 | Metadata row | `.info-key` / `.info-value` | `GtkLabel` | Blue mono key (left) · dim mono value (right) |
 | Lightbox | `.lightbox`, `.lightbox-nav`, `.lightbox-btn`, `.lightbox-caption` | overlay | Full-window dark viewer |
-| Editor | `.editor`, `.edit-tools`, `.editor-scale`, `.editor-tool-btn` | overlay | Dark editing surface |
+| Editor | `.editor`, `.editor-panel`, `.editor-scale`, `.editor-tool-btn`, `.editor-filter` | overlay | Paper + tools panel: Adjust sliders (brightness, contrast, saturation, exposure, temperature), Transform row (rotate, crop, flip), Filter chips |
 
 ---
 

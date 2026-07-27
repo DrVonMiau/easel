@@ -170,11 +170,19 @@ class EaselWindow(Adw.ApplicationWindow):
     edit_brightness = Gtk.Template.Child()
     edit_contrast = Gtk.Template.Child()
     edit_saturation = Gtk.Template.Child()
+    edit_exposure = Gtk.Template.Child()
+    edit_temperature = Gtk.Template.Child()
     edit_cancel_btn = Gtk.Template.Child()
     edit_save_btn = Gtk.Template.Child()
     edit_rotate_left_btn = Gtk.Template.Child()
     edit_rotate_right_btn = Gtk.Template.Child()
-    edit_reset_btn = Gtk.Template.Child()
+    edit_crop_btn = Gtk.Template.Child()
+    edit_flip_h_btn = Gtk.Template.Child()
+    edit_flip_v_btn = Gtk.Template.Child()
+    edit_filter_original = Gtk.Template.Child()
+    edit_filter_mono = Gtk.Template.Child()
+    edit_filter_sepia = Gtk.Template.Child()
+    edit_filter_warm = Gtk.Template.Child()
 
     PANEL_WIDTH = 300
 
@@ -1201,9 +1209,22 @@ class EaselWindow(Adw.ApplicationWindow):
             "value-changed", lambda s: self._edit_set("contrast", 1.0 + s.get_value() / 100.0))
         self.edit_saturation.connect(
             "value-changed", lambda s: self._edit_set("saturation", 1.0 + s.get_value() / 100.0))
+        self.edit_exposure.connect(
+            "value-changed", lambda s: self._edit_set("exposure", 1.0 + s.get_value() / 100.0))
+        self.edit_temperature.connect(
+            "value-changed", lambda s: self._edit_set("temperature", s.get_value() / 100.0))
         self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
         self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
-        self.edit_reset_btn.connect("clicked", lambda *_: self._reset_editor())
+        self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
+        self.edit_flip_v_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("v"))
+        self._edit_filter_btns = {
+            "original": self.edit_filter_original,
+            "mono": self.edit_filter_mono,
+            "sepia": self.edit_filter_sepia,
+            "warm": self.edit_filter_warm,
+        }
+        for name, btn in self._edit_filter_btns.items():
+            btn.connect("clicked", lambda _b, n=name: self._apply_filter(n))
         self.edit_cancel_btn.connect("clicked", lambda *_: self._close_editor())
         self.edit_save_btn.connect("clicked", lambda *_: self._save_edit())
 
@@ -1237,11 +1258,38 @@ class EaselWindow(Adw.ApplicationWindow):
         self.edit_revealer.set_visible(True)
         self.edit_revealer.set_reveal_child(True)
 
+    # Filter presets: slider positions (−100..100) for
+    # brightness/contrast/saturation/exposure/temperature, plus a colour tone.
+    _FILTERS = {
+        "original": (0, 0, 0, 0, 0, "none"),
+        "mono":     (0, 0, -100, 0, 0, "none"),
+        "sepia":    (0, 0, 0, 0, 0, "sepia"),
+        "warm":     (0, 5, 8, 0, 45, "none"),
+    }
+
     def _reset_editor(self):
-        for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation):
+        for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation,
+                      self.edit_exposure, self.edit_temperature):
             scale.set_value(0)
         if self._edit_image is not None:
             self._edit_image.reset()
+        self._select_filter("original")
+
+    def _apply_filter(self, name):
+        b, c, s, e, t, tone = self._FILTERS[name]
+        self.edit_brightness.set_value(b)
+        self.edit_contrast.set_value(c)
+        self.edit_saturation.set_value(s)
+        self.edit_exposure.set_value(e)
+        self.edit_temperature.set_value(t)
+        if self._edit_image is not None:
+            self._edit_image.set_adjustment("tone", tone)
+        self._select_filter(name)
+
+    def _select_filter(self, name):
+        for key, btn in getattr(self, "_edit_filter_btns", {}).items():
+            btn.set_css_classes(["editor-filter", "selected"] if key == name
+                                else ["editor-filter"])
 
     def _close_editor(self):
         self.edit_revealer.set_reveal_child(False)

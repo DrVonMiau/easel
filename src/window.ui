@@ -708,7 +708,7 @@
                         <property name="child">
                           <object class="GtkBox" id="info_rows_box">
                             <property name="orientation">vertical</property>
-                            <property name="spacing">8</property>
+                            <property name="spacing">16</property>
                           </object>
                         </property>
                       </object>
@@ -847,29 +847,30 @@
               <object class="GtkBox">
                 <property name="orientation">vertical</property>
                 <style>
+                  <class name="root-bg"/>
                   <class name="editor"/>
                 </style>
 
+                <!-- header: window controls + Cancel / Save -->
                 <child>
                   <object class="GtkCenterBox">
-                    <property name="margin-top">12</property>
-                    <property name="margin-start">20</property>
-                    <property name="margin-end">20</property>
-                    <property name="margin-bottom">4</property>
+                    <property name="margin-top">11</property>
+                    <property name="margin-start">16</property>
+                    <property name="margin-end">16</property>
+                    <property name="margin-bottom">16</property>
                     <property name="start-widget">
-                      <object class="GtkLabel">
-                        <property name="label" translatable="yes">Edit Photo</property>
-                        <style>
-                          <class name="editor-title"/>
-                        </style>
+                      <object class="GtkWindowControls">
+                        <property name="side">start</property>
+                        <property name="valign">center</property>
                       </object>
                     </property>
                     <property name="end-widget">
                       <object class="GtkBox">
-                        <property name="spacing">8</property>
+                        <property name="spacing">16</property>
                         <child>
                           <object class="GtkButton" id="edit_cancel_btn">
                             <property name="label" translatable="yes">Cancel</property>
+                            <property name="valign">center</property>
                             <style>
                               <class name="editor-cancel"/>
                             </style>
@@ -877,9 +878,9 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="edit_save_btn">
-                            <property name="label" translatable="yes">Save a Copy</property>
+                            <property name="label" translatable="yes">Save</property>
+                            <property name="valign">center</property>
                             <style>
-                              <class name="suggested-action"/>
                               <class name="editor-save"/>
                             </style>
                           </object>
@@ -889,164 +890,296 @@
                   </object>
                 </child>
 
+                <!-- content: the paper card (image) + the tools panel -->
                 <child>
                   <object class="GtkBox">
                     <property name="orientation">horizontal</property>
+                    <property name="hexpand">true</property>
                     <property name="vexpand">true</property>
+                    <property name="spacing">40</property>
+                    <property name="margin-start">64</property>
+                    <property name="margin-end">64</property>
                     <child>
-                      <object class="GtkBox" id="edit_image_slot">
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
                         <property name="hexpand">true</property>
                         <property name="vexpand">true</property>
-                        <property name="margin-start">20</property>
-                        <property name="margin-end">16</property>
-                        <property name="margin-top">8</property>
-                        <property name="margin-bottom">20</property>
+                        <style>
+                          <class name="paper"/>
+                        </style>
+                        <child>
+                          <object class="GtkBox" id="edit_image_slot">
+                            <property name="hexpand">true</property>
+                            <property name="vexpand">true</property>
+                            <property name="margin-top">24</property>
+                            <property name="margin-bottom">8</property>
+                            <property name="margin-start">24</property>
+                            <property name="margin-end">24</property>
+                          </object>
+                        </child>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkBox" id="edit_tools">
-                        <property name="orientation">vertical</property>
-                        <property name="spacing">12</property>
-                        <property name="width-request">280</property>
-                        <property name="margin-end">20</property>
-                        <property name="margin-top">8</property>
-                        <property name="margin-bottom">20</property>
+                      <object class="GtkScrolledWindow">
+                        <property name="hscrollbar-policy">never</property>
+                        <property name="width-request">300</property>
                         <style>
-                          <class name="edit-tools"/>
+                          <class name="om-scroll"/>
                         </style>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Adjust</property>
-                            <property name="xalign">0</property>
+                        <property name="child">
+                          <object class="GtkBox" id="edit_tools">
+                            <property name="orientation">vertical</property>
+                            <property name="spacing">16</property>
+                            <property name="margin-bottom">24</property>
                             <style>
-                              <class name="editor-eyebrow"/>
+                              <class name="editor-panel"/>
                             </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Brightness</property>
-                            <property name="xalign">0</property>
-                            <style>
-                              <class name="editor-slider-label"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkScale" id="edit_brightness">
-                            <property name="draw-value">false</property>
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100</property>
-                                <property name="upper">100</property>
-                                <property name="value">0</property>
-                                <property name="step-increment">1</property>
-                              </object>
-                            </property>
-                            <style>
-                              <class name="editor-scale"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Contrast</property>
-                            <property name="xalign">0</property>
-                            <style>
-                              <class name="editor-slider-label"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkScale" id="edit_contrast">
-                            <property name="draw-value">false</property>
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100</property>
-                                <property name="upper">100</property>
-                                <property name="value">0</property>
-                                <property name="step-increment">1</property>
-                              </object>
-                            </property>
-                            <style>
-                              <class name="editor-scale"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label" translatable="yes">Saturation</property>
-                            <property name="xalign">0</property>
-                            <style>
-                              <class name="editor-slider-label"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkScale" id="edit_saturation">
-                            <property name="draw-value">false</property>
-                            <property name="adjustment">
-                              <object class="GtkAdjustment">
-                                <property name="lower">-100</property>
-                                <property name="upper">100</property>
-                                <property name="value">0</property>
-                                <property name="step-increment">1</property>
-                              </object>
-                            </property>
-                            <style>
-                              <class name="editor-scale"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkSeparator">
-                            <property name="margin-top">6</property>
-                            <property name="margin-bottom">6</property>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkBox">
-                            <property name="spacing">8</property>
-                            <property name="homogeneous">true</property>
+
                             <child>
-                              <object class="GtkButton" id="edit_rotate_left_btn">
-                                <property name="tooltip-text" translatable="yes">Rotate left</property>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Adjust</property>
+                                <property name="xalign">0</property>
+                                <style>
+                                  <class name="editor-eyebrow"/>
+                                </style>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">8</property>
                                 <child>
-                                  <object class="AdwButtonContent">
-                                    <property name="icon-name">object-rotate-left-symbolic</property>
-                                    <property name="label" translatable="yes">Left</property>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Brightness</property>
+                                    <property name="xalign">0</property>
+                                    <style><class name="editor-slider-label"/></style>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="GtkScale" id="edit_brightness">
+                                    <property name="draw-value">false</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">-100</property>
+                                        <property name="upper">100</property>
+                                        <property name="value">0</property>
+                                        <property name="step-increment">1</property>
+                                      </object>
+                                    </property>
+                                    <style><class name="editor-scale"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">8</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Contrast</property>
+                                    <property name="xalign">0</property>
+                                    <style><class name="editor-slider-label"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="edit_contrast">
+                                    <property name="draw-value">false</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">-100</property>
+                                        <property name="upper">100</property>
+                                        <property name="value">0</property>
+                                        <property name="step-increment">1</property>
+                                      </object>
+                                    </property>
+                                    <style><class name="editor-scale"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">8</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Saturation</property>
+                                    <property name="xalign">0</property>
+                                    <style><class name="editor-slider-label"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="edit_saturation">
+                                    <property name="draw-value">false</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">-100</property>
+                                        <property name="upper">100</property>
+                                        <property name="value">0</property>
+                                        <property name="step-increment">1</property>
+                                      </object>
+                                    </property>
+                                    <style><class name="editor-scale"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">8</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Exposure</property>
+                                    <property name="xalign">0</property>
+                                    <style><class name="editor-slider-label"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="edit_exposure">
+                                    <property name="draw-value">false</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">-100</property>
+                                        <property name="upper">100</property>
+                                        <property name="value">0</property>
+                                        <property name="step-increment">1</property>
+                                      </object>
+                                    </property>
+                                    <style><class name="editor-scale"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">8</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label" translatable="yes">Temperature</property>
+                                    <property name="xalign">0</property>
+                                    <style><class name="editor-slider-label"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkScale" id="edit_temperature">
+                                    <property name="draw-value">false</property>
+                                    <property name="adjustment">
+                                      <object class="GtkAdjustment">
+                                        <property name="lower">-100</property>
+                                        <property name="upper">100</property>
+                                        <property name="value">0</property>
+                                        <property name="step-increment">1</property>
+                                      </object>
+                                    </property>
+                                    <style><class name="editor-scale"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Transform</property>
+                                <property name="xalign">0</property>
+                                <property name="margin-top">8</property>
                                 <style>
-                                  <class name="editor-tool-btn"/>
+                                  <class name="editor-eyebrow"/>
                                 </style>
                               </object>
                             </child>
                             <child>
-                              <object class="GtkButton" id="edit_rotate_right_btn">
-                                <property name="tooltip-text" translatable="yes">Rotate right</property>
+                              <object class="GtkBox">
+                                <property name="spacing">8</property>
+                                <property name="homogeneous">true</property>
                                 <child>
-                                  <object class="AdwButtonContent">
-                                    <property name="icon-name">object-rotate-right-symbolic</property>
-                                    <property name="label" translatable="yes">Right</property>
+                                  <object class="GtkButton" id="edit_rotate_left_btn">
+                                    <property name="icon-name">easel-rotate-ccw-symbolic</property>
+                                    <property name="tooltip-text" translatable="yes">Rotate left</property>
+                                    <style><class name="editor-tool-btn"/></style>
                                   </object>
                                 </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_rotate_right_btn">
+                                    <property name="icon-name">easel-rotate-cw-symbolic</property>
+                                    <property name="tooltip-text" translatable="yes">Rotate right</property>
+                                    <style><class name="editor-tool-btn"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_crop_btn">
+                                    <property name="icon-name">easel-crop-symbolic</property>
+                                    <property name="sensitive">false</property>
+                                    <property name="tooltip-text" translatable="yes">Crop — coming soon</property>
+                                    <style><class name="editor-tool-btn"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_flip_h_btn">
+                                    <property name="icon-name">easel-flip-horizontal-symbolic</property>
+                                    <property name="tooltip-text" translatable="yes">Flip horizontal</property>
+                                    <style><class name="editor-tool-btn"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_flip_v_btn">
+                                    <property name="icon-name">easel-flip-vertical-symbolic</property>
+                                    <property name="tooltip-text" translatable="yes">Flip vertical</property>
+                                    <style><class name="editor-tool-btn"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkLabel">
+                                <property name="label" translatable="yes">Filter</property>
+                                <property name="xalign">0</property>
+                                <property name="margin-top">8</property>
                                 <style>
-                                  <class name="editor-tool-btn"/>
+                                  <class name="editor-eyebrow"/>
                                 </style>
                               </object>
                             </child>
+                            <child>
+                              <object class="GtkBox">
+                                <property name="spacing">8</property>
+                                <property name="homogeneous">true</property>
+                                <child>
+                                  <object class="GtkButton" id="edit_filter_original">
+                                    <property name="label" translatable="yes">Original</property>
+                                    <style><class name="editor-filter"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_filter_mono">
+                                    <property name="label" translatable="yes">B&amp;W</property>
+                                    <style><class name="editor-filter"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_filter_sepia">
+                                    <property name="label" translatable="yes">Sepia</property>
+                                    <style><class name="editor-filter"/></style>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="edit_filter_warm">
+                                    <property name="label" translatable="yes">Warm</property>
+                                    <style><class name="editor-filter"/></style>
+                                  </object>
+                                </child>
+                              </object>
+                            </child>
                           </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="edit_reset_btn">
-                            <property name="label" translatable="yes">Reset</property>
-                            <property name="margin-top">4</property>
-                            <style>
-                              <class name="editor-tool-btn"/>
-                            </style>
-                          </object>
-                        </child>
+                        </property>
                       </object>
                     </child>
                   </object>
