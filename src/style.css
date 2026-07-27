@@ -1,20 +1,38 @@
-/* Easel — system palette with blue & gold accents.
-   Surfaces and primary text come from libadwaita's named colors
-   (@window_bg_color, @card_bg_color, @window_fg_color, …) so both themes
-   track the system Adwaita palette; colour is reserved for accents:
-   blue for interactive elements (buttons, sliders, links, selection) and
-   gold for favourites. Secondary text is a blue tint — darker on the light
-   theme, lighter on the dark one.
-   IBM Plex Sans/Mono are bundled by the Flatpak manifest; the generic
-   fallbacks only matter for non-Flatpak development runs. */
+/* ============================================================================
+   Easel — design tokens
+   ----------------------------------------------------------------------------
+   The source of truth for these values is the Easel design system in Figma;
+   docs/DESIGN.md maps every token below to its Figma name and to the
+   components that consume it. GTK CSS only lets us name *colours*
+   (@define-color) — the spacing, radius, type and elevation scales can't be
+   real variables here, so they live as the documented scales below and are
+   applied by hand. Always snap a new value to a scale step.
 
-/* Interactive accent */
-@define-color easel_blue #4f6ad9;
-@define-color easel_blue_light #8fa2ec;
-/* Favourites */
+   Colour model: neutral surfaces and primary text come from libadwaita's
+   named system colours (@window_bg_color, @card_bg_color, @view_bg_color,
+   @window_fg_color) so both light and dark track the system Adwaita palette.
+   Figma's Grey 200/300/400 (#4c4c4f / #2c2c2c / #242424) are the *dark-theme*
+   realisation of that neutral scale — we let libadwaita supply them rather
+   than hard-coding, so light mode works too. Colour beyond that is reserved
+   for accents: blue for interactive elements, gold for favourites.
+
+   Spacing scale (px):  XS 4 · S 8 · M 16 · L 24        (Figma Spase/Space)
+   Radius scale (px):   control/tab 8 (Corners M) · button 10 · card 14 · pill 9999
+   Type:  IBM Plex Sans (UI & body) · IBM Plex Mono (labels, eyebrows, tabs);
+          sizes 10–30px, weights 400 / 500 / 600
+   Elevation: card = 0 1px 2px alpha(#000,.04), 0 12px 32px alpha(#000,.08)
+              (dark: .2 / .35). Figma "Shadow" = 0 6px 24px alpha(#000,.35).
+   IBM Plex Sans/Mono are bundled by the Flatpak manifest; the generic
+   fallbacks only matter for non-Flatpak development runs.
+   ========================================================================= */
+
+/* Interactive accent — Figma Blue 200 (light) / Blue 100 (dark) */
+@define-color easel_blue #5565bf;
+@define-color easel_blue_light #7a89dd;
+/* Favourites — Easel-specific accent, not part of the shared Figma tokens */
 @define-color easel_gold #c1962b;
 @define-color easel_gold_light #ddb964;
-/* Secondary text */
+/* Secondary text — a blue tint; Easel-specific, darker on light / lighter on dark */
 @define-color easel_text_soft #5a6a9e;
 @define-color easel_text_soft_dark #a7b2da;
 
@@ -73,13 +91,13 @@ checkbutton radio:checked {
 
 .tab-btn {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
+  font-size: 13px;               /* Figma ..tab: 13px mono */
   font-weight: 500;
   letter-spacing: 0.06em;
   color: alpha(@window_fg_color, 0.55);
-  padding: 5px 14px;
+  padding: 5px 12px;             /* Figma ..tab: 5 / 12 (Space S-ish) */
   min-height: 0;
-  border-radius: 9px;
+  border-radius: 8px;            /* radius token: control/tab = Corners M */
   background: none;
 }
 
@@ -107,7 +125,7 @@ checkbutton radio:checked {
   font-size: 12px;
   color: @window_fg_color;
   border: 1px solid alpha(@window_fg_color, 0.15);
-  border-radius: 7px;
+  border-radius: 8px;            /* radius token: control = Corners M */
   padding: 7px 12px;
   background-color: @view_bg_color;
   min-height: 0;
@@ -125,14 +143,15 @@ checkbutton radio:checked {
   box-shadow: 0 1px 2px alpha(#000, 0.04), 0 12px 32px alpha(#000, 0.08);
 }
 
+/* Tertiary button (bordered) — Figma .btn Type=Tertiary. */
 .back-btn {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
+  font-size: 13px;               /* Figma .btn: 13px mono */
   letter-spacing: 0.04em;
   color: alpha(@window_fg_color, 0.7);
   border: 1px solid alpha(@window_fg_color, 0.18);
-  border-radius: 7px;
-  padding: 7px 14px;
+  border-radius: 10px;           /* radius token: button = 10 */
+  padding: 7px 16px;             /* Space M horizontal */
   background: none;
 }
 
@@ -391,11 +410,12 @@ gridview.card-grid > child:focus {
   background-color: alpha(@window_fg_color, 0.08);
 }
 
+/* Primary button, square variant — Figma .btn Type=Primary (blue). */
 .info-fs-btn {
   min-width: 46px;
   min-height: 46px;
   padding: 0;
-  border-radius: 11px;
+  border-radius: 10px;           /* radius token: button = 10 */
   color: #ffffff;
   background-color: @easel_blue;
 }
@@ -446,10 +466,13 @@ gridview.card-grid > child:focus {
   opacity: 1;
 }
 
-/* Empty-state call-to-action pill. */
+/* Empty-state call-to-action — Figma .btn Type=Primary (radius 10, not a
+   pill). The .pill class in the markup is overridden here to the button
+   radius token; declared after the theme so this wins. */
 .empty-cta {
   background-color: @easel_blue;
   color: #ffffff;
+  border-radius: 10px;
 }
 
 .empty-cta:hover {
