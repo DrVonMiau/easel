@@ -633,8 +633,9 @@
                     <child>
                       <object class="GtkBox">
                         <property name="orientation">horizontal</property>
-                        <property name="halign">center</property>
-                        <property name="spacing">16</property>
+                        <property name="hexpand">true</property>
+                        <property name="homogeneous">true</property>
+                        <property name="spacing">10</property>
                         <property name="margin-top">2</property>
                         <property name="margin-bottom">2</property>
                         <child>
@@ -719,7 +720,7 @@
                         <property name="child">
                           <object class="GtkBox" id="info_rows_box">
                             <property name="orientation">vertical</property>
-                            <property name="spacing">16</property>
+                            <property name="spacing">8</property>
                           </object>
                         </property>
                       </object>

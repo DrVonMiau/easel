@@ -1076,10 +1076,12 @@ class EaselWindow(Adw.ApplicationWindow):
         self._apply_layout_metrics()
 
     def _info_row(self, key, value):
-        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        k = Gtk.Label(label=key.upper(), xalign=0, css_classes=["info-key"])
-        v = Gtk.Label(label=value, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
-                      selectable=True, css_classes=["info-value"])
+        # Figma info rows: mono key on the left, value pushed to the right.
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        k = Gtk.Label(label=key, xalign=0, css_classes=["info-key"])
+        v = Gtk.Label(label=value, xalign=1, hexpand=True, halign=Gtk.Align.END,
+                      ellipsize=Pango.EllipsizeMode.END, selectable=True,
+                      css_classes=["info-value"])
         row.append(k)
         row.append(v)
         return row

@@ -17,7 +17,7 @@
    for accents: blue for interactive elements, gold for favourites.
 
    Spacing scale (px):  XS 4 · S 8 · M 16 · L 24        (Figma Spase/Space)
-   Radius scale (px):   control/tab 8 (Corners M) · button 10 · card 14 · pill 9999
+   Radius scale (px):   thumbnail 4 · control/tab 8 (Corners M) · button/tabs-group 10 · card 16 · pill 9999
    Type:  IBM Plex Sans (UI & body) · IBM Plex Mono (labels, eyebrows, tabs);
           sizes 10–30px, weights 400 / 500 / 600
    Elevation: card = 0 1px 2px alpha(#000,.04), 0 12px 32px alpha(#000,.08)
@@ -85,8 +85,8 @@ checkbutton radio:checked {
    container; the active tab is a raised pill inside it. */
 .tab-group {
   background-color: alpha(@window_fg_color, 0.06);
-  border-radius: 12px;
-  padding: 3px;
+  border-radius: 10px;           /* Figma .tabs container */
+  padding: 4px;                  /* Space XS */
 }
 
 .tab-btn {
@@ -139,7 +139,7 @@ checkbutton radio:checked {
 
 .paper {
   background-color: @card_bg_color;
-  border-radius: 14px 14px 0 0;
+  border-radius: 16px 16px 0 0;  /* Figma paper: 16 top corners */
   box-shadow: 0 1px 2px alpha(#000, 0.04), 0 12px 32px alpha(#000, 0.08);
 }
 
@@ -184,7 +184,7 @@ checkbutton radio:checked {
 .swatch {
   background-color: alpha(@window_fg_color, 0.04);
   border: 1px solid alpha(@window_fg_color, 0.08);
-  border-radius: 10px;
+  border-radius: 4px;            /* Figma .photo_tumbnail: 4 */
   /* stripe pattern color (picked up by the placeholder drawing) */
   color: alpha(@window_fg_color, 0.12);
 }
@@ -366,17 +366,17 @@ gridview.card-grid > child:focus {
   color: @window_fg_color;
 }
 
+/* Metadata rows — Figma: blue mono key (left) / dim mono value (right). */
 .info-key {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  color: @easel_text_soft;
+  font-size: 12px;
+  color: @easel_blue;
 }
 
 .info-value {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 13px;
-  color: @window_fg_color;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: alpha(@window_fg_color, 0.55);
 }
 
 /* Close button, floated over the top-right of the preview. */
@@ -393,27 +393,26 @@ gridview.card-grid > child:focus {
   background-color: alpha(#000, 0.6);
 }
 
-/* Quick-action buttons below the preview: flat icons on the panel background
-   (no circle), with the fullscreen button a blue rounded square in the middle
-   — matching the segmented tabs' shape. */
+/* Quick-action buttons below the preview — Figma .btn Secondary: filled
+   neutral, equal width across the panel, 44px tall, radius 10. The middle
+   (fullscreen) is the primary/blue variant, .info-fs-btn. */
 .info-action {
-  min-width: 34px;
-  min-height: 34px;
+  min-height: 44px;
   padding: 0;
-  border-radius: 8px;
-  color: alpha(@window_fg_color, 0.65);
-  background: none;
+  border-radius: 10px;           /* radius token: button = 10 */
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.10);
 }
 
 .info-action:hover {
   color: @window_fg_color;
-  background-color: alpha(@window_fg_color, 0.08);
+  background-color: alpha(@window_fg_color, 0.16);
 }
 
-/* Primary button, square variant — Figma .btn Type=Primary (blue). */
+/* Primary button — Figma .btn Type=Primary (blue), sized to match the
+   secondary actions beside it. */
 .info-fs-btn {
-  min-width: 46px;
-  min-height: 46px;
+  min-height: 44px;
   padding: 0;
   border-radius: 10px;           /* radius token: button = 10 */
   color: #ffffff;
@@ -509,9 +508,13 @@ window.dark .back-btn:hover {
 
 window.dark .eyebrow,
 window.dark .mono-dim,
-window.dark .mono-dim-sm,
-window.dark .info-key {
+window.dark .mono-dim-sm {
   color: @easel_text_soft_dark;
+}
+
+/* Metadata key uses the accent blue (Figma Blue 100 on dark). */
+window.dark .info-key {
+  color: @easel_blue_light;
 }
 
 window.dark .thumb-scale highlight,

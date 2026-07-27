@@ -63,15 +63,18 @@ Figma scale, in px. Snap new margins, padding and gaps to a step.
 | L | Space L | 24 |
 
 Applied: paper content inset = **L (24)**, photo-grid gap = **M (16)**,
-titlebar→tabs gap and info-panel rhythm = **M (16)**.
+titlebar→tabs gap and info-panel rhythm = **M (16)**, metadata-row gap =
+**S (8)**. (The Figma content↔info-panel gap of 40px is structural — the
+info panel slides in via a revealer — and is not applied as a fixed token.)
 
 ### Radius
 
 | Role | px | Figma | Applies to |
 |---|---|---|---|
-| Control / tab | 8 | Corners M | `.tab-btn`, `.search-entry`, `.info-action` |
-| Button | 10 | *(from `.btn`)* | `.back-btn`, `.empty-cta`, `.info-fs-btn` |
-| Card | 14 | — | `.paper` (top corners) |
+| Thumbnail | 4 | `.photo_tumbnail` | `.swatch` (photo tiles, album covers, previews) |
+| Control / tab | 8 | Corners M | `.tab-btn`, `.search-entry` |
+| Button / tabs group | 10 | `.btn` / `.tabs` | `.back-btn`, `.empty-cta`, `.info-fs-btn`, `.info-action`, `.tab-group` |
+| Card | 16 | paper | `.paper` (top corners) |
 | Pill / full | 9999 | — | circular icon buttons, badges, slider handles |
 
 ### Type
@@ -91,9 +94,8 @@ Weights: 400 (regular) · 500 (medium) · 600 (semibold).
 | Card / info title | Sans | 15–13.5 | 600 | — | `.info-title`, `.card-title` |
 | Body / value | Sans | 13 | 400 | — | `.info-value`, `.editor-slider-label` |
 | Tab / button | Mono | 13 | 500 | 0.04–0.06em | `.tab-btn`, `.back-btn` |
-| Metadata / caption | Mono | 12 | 400 | — | `.mono-dim`, `.search-entry` |
+| Metadata / caption | Mono | 12 | 400 | — | `.mono-dim`, `.search-entry`, `.info-key`, `.info-value` |
 | Eyebrow | Mono | 11 | 400 | 0.14em | `.eyebrow`, `.editor-eyebrow` |
-| Key (uppercase-ish) | Mono | 10 | 400 | 0.12em | `.info-key` |
 
 ### Elevation
 
@@ -126,8 +128,9 @@ these before inventing new styling.
 | — video badge | `.video-badge` | `GtkImage` | Centred play glyph |
 | Search | `.search-entry` | `GtkSearchEntry` | Mono, radius 8, blue focus border |
 | Thumb-size slider | `.thumb-scale` | `GtkScale` | Thin track, blue handle on hover |
-| Info panel | `.info-panel`, `.info-preview`, `.info-key`, `.info-value` | `GtkBox` | Preview + quick actions + metadata rows |
-| Quick action | `.info-action` | `GtkButton` | Flat icon, radius 8 |
+| Info panel | `.info-panel`, `.info-preview` | `GtkBox` | Preview + quick actions + metadata rows |
+| Quick action | `.info-action` / `.info-fs-btn` | `GtkButton` | Five equal-width filled buttons (44px, radius 10): grey secondary + blue primary (fullscreen) |
+| Metadata row | `.info-key` / `.info-value` | `GtkLabel` | Blue mono key (left) · dim mono value (right) |
 | Lightbox | `.lightbox`, `.lightbox-nav`, `.lightbox-btn`, `.lightbox-caption` | overlay | Full-window dark viewer |
 | Editor | `.editor`, `.edit-tools`, `.editor-scale`, `.editor-tool-btn` | overlay | Dark editing surface |
 
