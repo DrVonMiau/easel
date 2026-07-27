@@ -95,7 +95,7 @@
                 </child>
                 <child>
                   <object class="GtkMenuButton" id="menu_button">
-                    <property name="icon-name">open-menu-symbolic</property>
+                    <property name="icon-name">easel-menu-symbolic</property>
                     <property name="tooltip-text" translatable="yes">Main Menu</property>
                     <property name="valign">center</property>
                     <property name="menu-model">primary_menu</property>
@@ -143,85 +143,87 @@
                     <property name="child">
                       <object class="GtkBox" id="tabs_box">
                         <property name="orientation">horizontal</property>
-                        <property name="spacing">12</property>
                         <property name="halign">start</property>
+                        <style>
+                          <class name="tab-group"/>
+                        </style>
                         <child>
-                          <object class="GtkBox">
-                            <property name="orientation">horizontal</property>
+                          <object class="GtkButton" id="tab_all_photos">
+                            <property name="label" translatable="yes">Days</property>
                             <style>
-                              <class name="tab-group"/>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
                             </style>
-                            <child>
-                              <object class="GtkButton" id="tab_all_photos">
-                                <property name="label" translatable="yes">All Photos</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="tab_months">
-                                <property name="label" translatable="yes">Months</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="tab_years">
-                                <property name="label" translatable="yes">Years</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
                           </object>
                         </child>
                         <child>
-                          <object class="GtkBox">
-                            <property name="orientation">horizontal</property>
+                          <object class="GtkButton" id="tab_months">
+                            <property name="label" translatable="yes">Months</property>
                             <style>
-                              <class name="tab-group"/>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
                             </style>
-                            <child>
-                              <object class="GtkButton" id="tab_albums">
-                                <property name="label" translatable="yes">Albums</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="tab_favourites">
-                                <property name="label" translatable="yes">Favourites</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="tab_maps">
-                                <property name="label" translatable="yes">Maps</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkButton" id="tab_people">
-                                <property name="label" translatable="yes">People</property>
-                                <style>
-                                  <class name="flat"/>
-                                  <class name="tab-btn"/>
-                                </style>
-                              </object>
-                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_years">
+                            <property name="label" translatable="yes">Years</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">|</property>
+                            <style>
+                              <class name="tab-sep"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_people">
+                            <property name="label" translatable="yes">People</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_maps">
+                            <property name="label" translatable="yes">Maps</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel">
+                            <property name="label">|</property>
+                            <style>
+                              <class name="tab-sep"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_albums">
+                            <property name="label" translatable="yes">Albums</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_favourites">
+                            <property name="label" translatable="yes">Favourites</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
                           </object>
                         </child>
                       </object>
@@ -268,8 +270,8 @@
                 </style>
                 <child>
                   <object class="GtkImage">
-                    <property name="icon-name">system-search-symbolic</property>
-                    <property name="pixel-size">14</property>
+                    <property name="icon-name">easel-search-symbolic</property>
+                    <property name="pixel-size">16</property>
                   </object>
                 </child>
               </object>
@@ -306,7 +308,7 @@
                         </style>
                         <child>
                           <object class="AdwButtonContent">
-                            <property name="icon-name">go-previous-symbolic</property>
+                            <property name="icon-name">easel-arrow-left-symbolic</property>
                             <property name="label" translatable="yes">Back</property>
                           </object>
                         </child>
@@ -615,7 +617,7 @@
                       <object class="GtkOverlay" id="info_preview_slot">
                         <child type="overlay">
                           <object class="GtkButton" id="info_close_btn">
-                            <property name="icon-name">window-close-symbolic</property>
+                            <property name="icon-name">easel-x-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Close</property>
                             <property name="halign">end</property>
                             <property name="valign">start</property>
@@ -640,7 +642,7 @@
                         <property name="margin-bottom">2</property>
                         <child>
                           <object class="GtkButton" id="info_rotate_left_btn">
-                            <property name="icon-name">object-rotate-left-symbolic</property>
+                            <property name="icon-name">easel-rotate-ccw-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Rotate left</property>
                             <property name="valign">center</property>
                             <style>
@@ -651,7 +653,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="info_rotate_right_btn">
-                            <property name="icon-name">object-rotate-right-symbolic</property>
+                            <property name="icon-name">easel-rotate-cw-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Rotate right</property>
                             <property name="valign">center</property>
                             <style>
@@ -662,7 +664,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="info_fullscreen_btn">
-                            <property name="icon-name">view-fullscreen-symbolic</property>
+                            <property name="icon-name">easel-maximize-symbolic</property>
                             <property name="tooltip-text" translatable="yes">View full screen</property>
                             <property name="valign">center</property>
                             <style>
@@ -673,7 +675,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="info_add_btn">
-                            <property name="icon-name">list-add-symbolic</property>
+                            <property name="icon-name">easel-plus-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Add to favourites or an album</property>
                             <property name="valign">center</property>
                             <style>
@@ -684,7 +686,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="info_edit_btn">
-                            <property name="icon-name">document-edit-symbolic</property>
+                            <property name="icon-name">easel-edit-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Edit</property>
                             <property name="valign">center</property>
                             <style>
@@ -755,7 +757,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="lightbox_close_btn">
-                            <property name="icon-name">window-close-symbolic</property>
+                            <property name="icon-name">easel-x-symbolic</property>
                             <property name="tooltip-text" translatable="yes">Close</property>
                             <property name="valign">center</property>
                             <style>

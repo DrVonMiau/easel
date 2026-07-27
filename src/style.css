@@ -71,6 +71,7 @@ checkbutton radio:checked {
   min-height: 26px;
   padding: 0;
   color: alpha(@window_fg_color, 0.55);
+  -gtk-icon-size: 18px;          /* feather icons, slightly larger */
 }
 
 .titlebar-icon:hover,
@@ -118,6 +119,14 @@ checkbutton radio:checked {
   font-weight: 600;
   background-color: @card_bg_color;
   box-shadow: 0 1px 3px alpha(#000, 0.12);
+}
+
+/* Dim separator between tab groups (Figma: a "|" in Grey 100). */
+.tab-sep {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  color: alpha(@window_fg_color, 0.22);
+  padding: 0 4px;
 }
 
 .search-entry {
@@ -372,6 +381,21 @@ gridview.card-grid > child:focus {
   color: alpha(@window_fg_color, 0.55);
 }
 
+/* Hairline divider between metadata groups (Figma: ~9% white). */
+.info-divider {
+  background-color: alpha(@window_fg_color, 0.09);
+  min-height: 1px;
+}
+
+/* The Path value is clickable (opens the file manager) — hint on hover. */
+.info-path:hover {
+  color: @easel_blue;
+}
+
+window.dark .info-path:hover {
+  color: @easel_blue_light;
+}
+
 /* Close button, floated over the top-right of the preview. */
 .info-close {
   min-width: 26px;
@@ -395,6 +419,7 @@ gridview.card-grid > child:focus {
   border-radius: 10px;           /* radius token: button = 10 */
   color: @window_fg_color;
   background-color: alpha(@window_fg_color, 0.10);
+  -gtk-icon-size: 20px;          /* feather icons, slightly larger */
 }
 
 .info-action:hover {
@@ -410,6 +435,7 @@ gridview.card-grid > child:focus {
   border-radius: 10px;           /* radius token: button = 10 */
   color: #ffffff;
   background-color: @easel_blue;
+  -gtk-icon-size: 20px;          /* feather icons, slightly larger */
 }
 
 .info-fs-btn:hover {
@@ -440,22 +466,16 @@ gridview.card-grid > child:focus {
   box-shadow: none;
 }
 
+/* Always-visible knob (Figma shows it at rest), a touch larger. */
 .thumb-scale slider {
-  min-width: 6px;
-  min-height: 6px;
-  margin: -2px;
+  min-width: 13px;
+  min-height: 13px;
+  margin: -6px;
   padding: 0;
   border-radius: 9999px;
   background-color: @easel_blue;
   border: 1px solid @window_bg_color;
   box-shadow: 0 1px 3px alpha(#000, 0.25);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.thumb-scale:hover slider,
-.thumb-scale slider:active {
-  opacity: 1;
 }
 
 /* Empty-state call-to-action — Figma .btn Type=Primary (radius 10, not a
