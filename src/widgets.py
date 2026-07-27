@@ -287,24 +287,39 @@ def load_thumbnail(path, size):
 _LUMA = (0.2126, 0.7152, 0.0722)
 
 
-def _adjust_color_matrix(brightness, contrast, saturation):
-    """Build the GSK colour matrix + offset for brightness/contrast/saturation.
+def _adjust_color_matrix(brightness, contrast, saturation, exposure=1.0,
+                         temperature=0.0, tone="none"):
+    """Build the GSK colour matrix + offset for the editor's adjustments.
 
-    brightness: additive, 0 = none. contrast/saturation: multiplicative factors,
-    1.0 = none. Composed as: out = k·(S·in) + (0.5·(1−k) + brightness), where S
-    is the saturation matrix and k the contrast factor.
+    brightness: additive, 0 = none. contrast/saturation/exposure: multiplicative
+    factors, 1.0 = none. temperature: -1..1, warms (>0) or cools (<0) the image
+    by scaling the red/blue channels. tone: "sepia" swaps the saturation matrix
+    for a fixed sepia tint. Composed as:
+        out = k·(T·g·B·in) + (0.5·(1−k) + brightness)
+    where B is the base 3×3 (saturation or sepia), g the exposure gain, T the
+    per-channel temperature scale and k the contrast factor.
 
     GSK reads the 16 floats column-major (verified against the runtime), i.e.
     floats[col*4 + row], so we assemble a row-major matrix and transpose."""
     lr, lg, lb = _LUMA
-    s = saturation
-    sat = (
-        (lr * (1 - s) + s, lg * (1 - s),     lb * (1 - s)),
-        (lr * (1 - s),     lg * (1 - s) + s, lb * (1 - s)),
-        (lr * (1 - s),     lg * (1 - s),     lb * (1 - s) + s),
-    )
+    if tone == "sepia":
+        base = (
+            (0.393, 0.769, 0.189),
+            (0.349, 0.686, 0.168),
+            (0.272, 0.534, 0.131),
+        )
+    else:
+        s = saturation
+        base = (
+            (lr * (1 - s) + s, lg * (1 - s),     lb * (1 - s)),
+            (lr * (1 - s),     lg * (1 - s) + s, lb * (1 - s)),
+            (lr * (1 - s),     lg * (1 - s),     lb * (1 - s) + s),
+        )
     k = contrast
-    rows = [[k * sat[i][j] for j in range(3)] + [0.0] for i in range(3)]
+    g = exposure
+    # Warm (>0): lift red, drop blue; cool (<0): the reverse.
+    t = (1.0 + 0.2 * temperature, 1.0, 1.0 - 0.2 * temperature)
+    rows = [[k * g * t[i] * base[i][j] for j in range(3)] + [0.0] for i in range(3)]
     rows.append([0.0, 0.0, 0.0, 1.0])  # alpha untouched
     floats = [rows[r][c] for c in range(4) for r in range(4)]  # column-major
     matrix = Graphene.Matrix()
@@ -322,7 +337,9 @@ def _snapshot_adjusted(snapshot, texture, adj, out_w, out_h):
     tw, th = texture.get_width(), texture.get_height()
     rot = adj["rotation"] % 360
     matrix, offset = _adjust_color_matrix(
-        adj["brightness"], adj["contrast"], adj["saturation"])
+        adj["brightness"], adj["contrast"], adj["saturation"],
+        adj.get("exposure", 1.0), adj.get("temperature", 0.0),
+        adj.get("tone", "none"))
     scale = min(out_w / (th if rot in (90, 270) else tw),
                 out_h / (tw if rot in (90, 270) else th))
     snapshot.push_color_matrix(matrix, offset)
@@ -330,6 +347,11 @@ def _snapshot_adjusted(snapshot, texture, adj, out_w, out_h):
     snapshot.translate(Graphene.Point().init(out_w / 2, out_h / 2))
     if rot:
         snapshot.rotate(rot)
+    # Mirror horizontally / vertically about the image centre.
+    sx = -1.0 if adj.get("flip_h") else 1.0
+    sy = -1.0 if adj.get("flip_v") else 1.0
+    if sx != 1.0 or sy != 1.0:
+        snapshot.scale(sx, sy)
     rw, rh = tw * scale, th * scale
     snapshot.append_texture(texture, Graphene.Rect().init(-rw / 2, -rh / 2, rw, rh))
     snapshot.restore()
@@ -361,7 +383,8 @@ def render_adjusted_texture(texture, adj):
 
 
 DEFAULT_ADJUSTMENTS = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0,
-                       "rotation": 0}
+                       "exposure": 1.0, "temperature": 0.0, "tone": "none",
+                       "flip_h": False, "flip_v": False, "rotation": 0}
 
 
 class AdjustableImage(Gtk.Widget):
@@ -392,6 +415,11 @@ class AdjustableImage(Gtk.Widget):
 
     def rotate(self, degrees):
         self._adj["rotation"] = (self._adj["rotation"] + degrees) % 360
+        self.queue_draw()
+
+    def toggle_flip(self, axis):
+        key = "flip_h" if axis == "h" else "flip_v"
+        self._adj[key] = not self._adj.get(key, False)
         self.queue_draw()
 
     def adjustments(self):

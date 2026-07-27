@@ -563,93 +563,142 @@ window.dark .empty-cta:hover {
 
 /* ---------- photo editor ---------- */
 
+/* The editor is a full-window overlay that reuses the app shell: the window
+   background behind a paper card (the image) and a transparent tools panel. */
 .editor {
-  background-color: alpha(#000, 0.94);
+  background-color: shade(@window_bg_color, 0.94);
 }
 
-.editor-title {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 16px;
-  font-weight: 600;
-  color: #ffffff;
+window.dark .editor {
+  background-color: @window_bg_color;
 }
 
-.edit-tools {
-  background-color: alpha(#ffffff, 0.05);
-  border-radius: 12px;
-  padding: 16px;
+.editor-panel {
+  background: none;
 }
 
+/* Section headers — Adjust / Transform / Filter. */
 .editor-eyebrow {
   font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  color: alpha(#ffffff, 0.55);
-  margin-bottom: 4px;
+  font-size: 12px;
+  color: alpha(@window_fg_color, 0.55);
 }
 
 .editor-slider-label {
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
-  color: alpha(#ffffff, 0.8);
+  color: @window_fg_color;
 }
 
+/* Cancel = tertiary (bordered); Save = primary (blue). Both radius 10. */
 .editor-cancel {
-  color: alpha(#ffffff, 0.8);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  color: @window_fg_color;
+  border: 1px solid alpha(@window_fg_color, 0.3);
+  border-radius: 10px;
+  padding: 4px 16px;
   background: none;
-  border: none;
   box-shadow: none;
 }
 
 .editor-cancel:hover {
-  color: #ffffff;
-  background-color: alpha(#ffffff, 0.1);
+  border-color: @easel_blue;
+  background-color: alpha(@window_fg_color, 0.06);
 }
 
 .editor-save {
-  background-color: @easel_blue;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
   color: #ffffff;
+  background-color: @easel_blue;
+  border-radius: 10px;
+  padding: 4px 16px;
 }
 
 .editor-save:hover {
   background-color: shade(@easel_blue, 1.08);
 }
 
+/* Transform buttons — filled secondary, equal width, radius 10, larger icon. */
 .editor-tool-btn {
-  color: alpha(#ffffff, 0.85);
-  background-color: alpha(#ffffff, 0.08);
+  min-height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.10);
+  border: none;
+  box-shadow: none;
+  -gtk-icon-size: 20px;
+}
+
+.editor-tool-btn:hover {
+  background-color: alpha(@window_fg_color, 0.16);
+}
+
+.editor-tool-btn:disabled {
+  color: alpha(@window_fg_color, 0.35);
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+/* Filter chips — filled secondary; the selected one gets a blue ring. */
+.editor-filter {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  min-height: 44px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: @window_fg_color;
+  background-color: alpha(@window_fg_color, 0.10);
   border: none;
   box-shadow: none;
 }
 
-.editor-tool-btn:hover {
-  color: #ffffff;
-  background-color: alpha(#ffffff, 0.16);
+.editor-filter:hover {
+  background-color: alpha(@window_fg_color, 0.16);
 }
 
-/* Blue slider on the dark editor panel. */
+.editor-filter.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue;
+}
+
+window.dark .editor-filter.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue_light;
+}
+
+/* Full-width slider — same look as the titlebar thumb slider. */
 .editor-scale {
   min-height: 2px;
   padding: 8px 0;
 }
 
 .editor-scale trough {
-  min-height: 3px;
+  min-height: 4px;
   border-radius: 2px;
-  background-color: alpha(#ffffff, 0.2);
+  background-color: alpha(@window_fg_color, 0.18);
+  border: none;
+  box-shadow: none;
 }
 
 .editor-scale highlight {
-  min-height: 3px;
+  min-height: 4px;
   border-radius: 2px;
-  background-color: @easel_blue_light;
+  background-color: @easel_blue;
+  box-shadow: none;
 }
 
 .editor-scale slider {
-  min-width: 14px;
-  min-height: 14px;
-  border-radius: 9999px;
-  background-color: #ffffff;
-  box-shadow: 0 1px 3px alpha(#000, 0.4);
+  min-width: 13px;
+  min-height: 13px;
   margin: -6px;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: @easel_blue;
+  border: 1px solid @window_bg_color;
+  box-shadow: 0 1px 3px alpha(#000, 0.25);
+}
+
+window.dark .editor-scale highlight,
+window.dark .editor-scale slider {
+  background-color: @easel_blue_light;
 }
