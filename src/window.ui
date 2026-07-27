@@ -129,7 +129,7 @@
             <property name="orientation">horizontal</property>
             <property name="spacing">8</property>
             <property name="margin-top">24</property>
-            <property name="margin-bottom">18</property>
+            <property name="margin-bottom">16</property>
             <property name="valign">center</property>
             <child>
               <object class="GtkStack" id="middle_stack">
@@ -297,8 +297,8 @@
                   <object class="GtkCenterBox" id="detail_back_row">
                     <property name="visible">false</property>
                     <property name="margin-top">24</property>
-                    <property name="margin-start">32</property>
-                    <property name="margin-end">32</property>
+                    <property name="margin-start">24</property>
+                    <property name="margin-end">24</property>
                     <property name="start-widget">
                       <object class="GtkButton" id="back_btn">
                         <style>
@@ -369,8 +369,8 @@
                                 <property name="max-columns">12</property>
                                 <property name="margin-top">24</property>
                                 <property name="margin-bottom">1</property>
-                                <property name="margin-start">32</property>
-                                <property name="margin-end">32</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
                                 <style>
                                   <class name="card-grid"/>
                                 </style>
@@ -396,8 +396,8 @@
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
                                 <property name="margin-bottom">1</property>
-                                <property name="margin-start">32</property>
-                                <property name="margin-end">32</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
                                 <property name="single-click-activate">true</property>
                                 <style>
                                   <class name="card-grid"/>
@@ -424,8 +424,8 @@
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
                                 <property name="margin-bottom">1</property>
-                                <property name="margin-start">32</property>
-                                <property name="margin-end">32</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
                                 <property name="single-click-activate">true</property>
                                 <style>
                                   <class name="card-grid"/>
@@ -452,8 +452,8 @@
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
                                 <property name="margin-bottom">1</property>
-                                <property name="margin-start">32</property>
-                                <property name="margin-end">32</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
                                 <property name="single-click-activate">true</property>
                                 <style>
                                   <class name="card-grid"/>
@@ -480,8 +480,8 @@
                                 <property name="max-columns">12</property>
                                 <property name="margin-top">24</property>
                                 <property name="margin-bottom">1</property>
-                                <property name="margin-start">32</property>
-                                <property name="margin-end">32</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
                                 <style>
                                   <class name="card-grid"/>
                                 </style>
@@ -537,8 +537,8 @@
                                     <property name="spacing">24</property>
                                     <property name="margin-top">24</property>
                                     <property name="margin-bottom">8</property>
-                                    <property name="margin-start">32</property>
-                                    <property name="margin-end">32</property>
+                                    <property name="margin-start">24</property>
+                                    <property name="margin-end">24</property>
                                     <child>
                                       <object class="GtkBox" id="detail_hero_slot"/>
                                     </child>
@@ -574,8 +574,8 @@
                                     <property name="max-columns">12</property>
                                     <property name="margin-top">20</property>
                                     <property name="margin-bottom">1</property>
-                                    <property name="margin-start">32</property>
-                                    <property name="margin-end">32</property>
+                                    <property name="margin-start">24</property>
+                                    <property name="margin-end">24</property>
                                     <property name="valign">start</property>
                                     <style>
                                       <class name="card-grid"/>
@@ -605,7 +605,7 @@
                 <property name="child">
                   <object class="GtkBox" id="info_panel">
                     <property name="orientation">vertical</property>
-                    <property name="spacing">14</property>
+                    <property name="spacing">16</property>
                     <property name="vexpand">true</property>
                     <style>
                       <class name="info-panel"/>
@@ -633,8 +633,9 @@
                     <child>
                       <object class="GtkBox">
                         <property name="orientation">horizontal</property>
-                        <property name="halign">center</property>
-                        <property name="spacing">14</property>
+                        <property name="hexpand">true</property>
+                        <property name="homogeneous">true</property>
+                        <property name="spacing">10</property>
                         <property name="margin-top">2</property>
                         <property name="margin-bottom">2</property>
                         <child>
@@ -696,20 +697,6 @@
                     </child>
 
                     <child>
-                      <object class="GtkLabel" id="info_title">
-                        <property name="xalign">0</property>
-                        <property name="ellipsize">end</property>
-                        <property name="wrap">true</property>
-                        <property name="lines">2</property>
-                        <property name="max-width-chars">28</property>
-                        <property name="width-chars">0</property>
-                        <style>
-                          <class name="info-title"/>
-                        </style>
-                      </object>
-                    </child>
-
-                    <child>
                       <object class="GtkScrolledWindow">
                         <property name="vexpand">true</property>
                         <property name="hscrollbar-policy">never</property>
@@ -719,7 +706,7 @@
                         <property name="child">
                           <object class="GtkBox" id="info_rows_box">
                             <property name="orientation">vertical</property>
-                            <property name="spacing">14</property>
+                            <property name="spacing">8</property>
                           </object>
                         </property>
                       </object>

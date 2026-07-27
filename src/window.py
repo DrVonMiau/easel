@@ -148,7 +148,6 @@ class EaselWindow(Adw.ApplicationWindow):
     info_revealer = Gtk.Template.Child()
     info_panel = Gtk.Template.Child()
     info_preview_slot = Gtk.Template.Child()
-    info_title = Gtk.Template.Child()
     info_rows_box = Gtk.Template.Child()
     info_close_btn = Gtk.Template.Child()
     info_fullscreen_btn = Gtk.Template.Child()
@@ -709,6 +708,8 @@ class EaselWindow(Adw.ApplicationWindow):
         text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
         title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
         subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
+        self._tooltip_when_ellipsized(title)
+        self._tooltip_when_ellipsized(subtitle)
         text_col.append(title)
         text_col.append(subtitle)
 
@@ -1053,7 +1054,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_photo_id = photo_id
         self._info_preview.set_size(self.PANEL_WIDTH)
         self._info_preview.set_path(row["path"], rotation=self._photo_rotation(row))
-        self.info_title.set_label(os.path.basename(row["path"]))
 
         self._clear_box(self.info_rows_box)
         dims = _dimensions(row["path"])
@@ -1076,13 +1076,32 @@ class EaselWindow(Adw.ApplicationWindow):
         self._apply_layout_metrics()
 
     def _info_row(self, key, value):
-        row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        k = Gtk.Label(label=key.upper(), xalign=0, css_classes=["info-key"])
-        v = Gtk.Label(label=value, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
-                      selectable=True, css_classes=["info-value"])
+        # Figma info rows: mono key on the left, value pushed to the right.
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        k = Gtk.Label(label=key, xalign=0, css_classes=["info-key"])
+        v = Gtk.Label(label=value, xalign=1, hexpand=True, halign=Gtk.Align.END,
+                      ellipsize=Pango.EllipsizeMode.END, selectable=True,
+                      css_classes=["info-value"])
+        self._tooltip_when_ellipsized(v)
         row.append(k)
         row.append(v)
         return row
+
+    @staticmethod
+    def _tooltip_when_ellipsized(label):
+        """Show the label's full text as a tooltip, but only while it is
+        actually truncated on screen — so untruncated text gets no redundant
+        tooltip. Covers long filenames, people lists, album titles, etc."""
+        label.set_has_tooltip(True)
+        label.connect("query-tooltip", EaselWindow._on_label_query_tooltip)
+
+    @staticmethod
+    def _on_label_query_tooltip(label, x, y, keyboard, tooltip):
+        layout = label.get_layout()
+        if layout is not None and layout.is_ellipsized():
+            tooltip.set_text(label.get_text())
+            return True
+        return False
 
     def _rotate_info(self, delta):
         if self._info_photo_id is None:
