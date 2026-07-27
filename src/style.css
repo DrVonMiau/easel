@@ -359,13 +359,6 @@ gridview.card-grid > child:focus {
   background-color: alpha(@window_fg_color, 0.05);
 }
 
-.info-title {
-  font-family: "IBM Plex Sans", sans-serif;
-  font-size: 15px;
-  font-weight: 600;
-  color: @window_fg_color;
-}
-
 /* Metadata rows — Figma: blue mono key (left) / dim mono value (right). */
 .info-key {
   font-family: "IBM Plex Mono", monospace;

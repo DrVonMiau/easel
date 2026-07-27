@@ -91,7 +91,7 @@ Weights: 400 (regular) · 500 (medium) · 600 (semibold).
 |---|---|---|---|---|---|
 | Display heading | Sans | 30 | 600 | -0.01em | `.artist-heading` |
 | Section title | Sans | 16 | 600 | — | `.group-header`, `.editor-title` |
-| Card / info title | Sans | 15–13.5 | 600 | — | `.info-title`, `.card-title` |
+| Card title | Sans | 13.5 | 600 | — | `.card-title` |
 | Body / value | Sans | 13 | 400 | — | `.info-value`, `.editor-slider-label` |
 | Tab / button | Mono | 13 | 500 | 0.04–0.06em | `.tab-btn`, `.back-btn` |
 | Metadata / caption | Mono | 12 | 400 | — | `.mono-dim`, `.search-entry`, `.info-key`, `.info-value` |

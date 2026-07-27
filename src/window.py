@@ -148,7 +148,6 @@ class EaselWindow(Adw.ApplicationWindow):
     info_revealer = Gtk.Template.Child()
     info_panel = Gtk.Template.Child()
     info_preview_slot = Gtk.Template.Child()
-    info_title = Gtk.Template.Child()
     info_rows_box = Gtk.Template.Child()
     info_close_btn = Gtk.Template.Child()
     info_fullscreen_btn = Gtk.Template.Child()
@@ -1053,7 +1052,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_photo_id = photo_id
         self._info_preview.set_size(self.PANEL_WIDTH)
         self._info_preview.set_path(row["path"], rotation=self._photo_rotation(row))
-        self.info_title.set_label(os.path.basename(row["path"]))
 
         self._clear_box(self.info_rows_box)
         dims = _dimensions(row["path"])
