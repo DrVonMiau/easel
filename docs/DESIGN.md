@@ -97,6 +97,15 @@ Weights: 400 (regular) · 500 (medium) · 600 (semibold).
 | Metadata / caption | Mono | 12 | 400 | — | `.mono-dim`, `.search-entry`, `.info-key`, `.info-value` |
 | Eyebrow | Mono | 11 | 400 | 0.14em | `.eyebrow`, `.editor-eyebrow` |
 
+### Icons
+
+[Feather](https://feathericons.com/) — stroke-based, 2px, round caps/joins —
+shipped as recolorable `-symbolic` resources under
+`src/icons/scalable/actions/` (registered in `easel.gresource.xml`). GTK tints
+them to each widget's foreground colour, so one file serves light and dark.
+Sizes: **18px** in the titlebar, **20px** for info-panel actions, 16px
+default elsewhere.
+
 ### Elevation
 
 | Role | Light | Dark |
@@ -121,7 +130,8 @@ these before inventing new styling.
 | `.btn` · Tertiary | `.back-btn` | `GtkButton` | Bordered, transparent fill, radius 10 |
 | `..tab` · Active | `.tab-btn.tab-active` | `GtkButton` | Raised pill; Grey 200 in dark, card + shadow in light |
 | `..tab` · Inactive | `.tab-btn` | `GtkButton` | Dim label, no fill |
-| `.tabs` (group) | `.tab-group` | `GtkBox` | Soft rounded container holding the tabs |
+| `.tabs` (group) | `.tab-group` | `GtkBox` | One rounded container holding every tab |
+| tab separator | `.tab-sep` | `GtkLabel` | Dim `\|` between tab groups |
 | `.photo_tumbnail` | `.swatch`, `.card-swatch` | `EaselSwatch` | Square, radius 10, cover-cropped; striped placeholder when empty |
 | — heart overlay | `.tile-fav` / `.tile-fav.faved` | `GtkButton` | White on dark badge → gold when favourited |
 | — menu overlay | `.card-menu-btn` | `GtkButton` | Circular, dark scrim |

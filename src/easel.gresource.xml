@@ -7,5 +7,14 @@
     <file>icons/scalable/actions/easel-more-symbolic.svg</file>
     <file>icons/scalable/actions/easel-sort-symbolic.svg</file>
     <file>icons/scalable/actions/easel-heart-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-rotate-ccw-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-rotate-cw-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-maximize-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-plus-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-edit-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-arrow-left-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-menu-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-search-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-x-symbolic.svg</file>
   </gresource>
 </gresources>

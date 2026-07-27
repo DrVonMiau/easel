@@ -1061,31 +1061,55 @@ class EaselWindow(Adw.ApplicationWindow):
             size = _fmt_size(os.path.getsize(row["path"]))
         except OSError:
             size = "—"
-        pairs = [
-            ("Album", row["album_title"] or "—"),
-            ("Date", _fmt_date(row["date_taken"]) or "Undated"),
-            ("Dimensions", f"{dims[0]} × {dims[1]}" if dims else "—"),
-            ("Size", size),
-            ("Path", row["path"]),
-        ]
-        for key, value in pairs:
-            self.info_rows_box.append(self._info_row(key, value))
+        path = row["path"]
+        # Order (Figma): [In this photo — once people exist] · Album · divider ·
+        # Date · Dimensions · Size · File name · Path. Clicking Path opens the
+        # file in the system file manager.
+        self.info_rows_box.append(self._info_row("Album", row["album_title"] or "—"))
+        self.info_rows_box.append(self._info_divider())
+        self.info_rows_box.append(self._info_row("Date", _fmt_date(row["date_taken"]) or "Undated"))
+        self.info_rows_box.append(self._info_row("Dimensions", f"{dims[0]} × {dims[1]}" if dims else "—"))
+        self.info_rows_box.append(self._info_row("Size", size))
+        self.info_rows_box.append(self._info_row("File name", os.path.basename(path)))
+        self.info_rows_box.append(
+            self._info_row("Path", path, on_click=lambda p=path: self._open_in_files(p)))
 
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
 
-    def _info_row(self, key, value):
+    def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         k = Gtk.Label(label=key, xalign=0, css_classes=["info-key"])
         v = Gtk.Label(label=value, xalign=1, hexpand=True, halign=Gtk.Align.END,
-                      ellipsize=Pango.EllipsizeMode.END, selectable=True,
+                      ellipsize=Pango.EllipsizeMode.END,
                       css_classes=["info-value"])
         self._tooltip_when_ellipsized(v)
+        if on_click is not None:
+            # e.g. the Path row: click opens the file in the file manager.
+            v.add_css_class("info-path")
+            v.set_cursor(POINTER_CURSOR)
+            gesture = Gtk.GestureClick()
+            gesture.connect("released", lambda *_a: on_click())
+            v.add_controller(gesture)
+        else:
+            v.set_selectable(True)
         row.append(k)
         row.append(v)
         return row
+
+    def _info_divider(self):
+        return Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL,
+                             css_classes=["info-divider"])
+
+    def _open_in_files(self, path):
+        """Open the system file manager with this file selected."""
+        try:
+            launcher = Gtk.FileLauncher.new(Gio.File.new_for_path(path))
+            launcher.open_containing_folder(self, None, None)
+        except Exception:
+            pass
 
     @staticmethod
     def _tooltip_when_ellipsized(label):
