@@ -708,6 +708,8 @@ class EaselWindow(Adw.ApplicationWindow):
         text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
         title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
         subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
+        self._tooltip_when_ellipsized(title)
+        self._tooltip_when_ellipsized(subtitle)
         text_col.append(title)
         text_col.append(subtitle)
 
@@ -1080,9 +1082,26 @@ class EaselWindow(Adw.ApplicationWindow):
         v = Gtk.Label(label=value, xalign=1, hexpand=True, halign=Gtk.Align.END,
                       ellipsize=Pango.EllipsizeMode.END, selectable=True,
                       css_classes=["info-value"])
+        self._tooltip_when_ellipsized(v)
         row.append(k)
         row.append(v)
         return row
+
+    @staticmethod
+    def _tooltip_when_ellipsized(label):
+        """Show the label's full text as a tooltip, but only while it is
+        actually truncated on screen — so untruncated text gets no redundant
+        tooltip. Covers long filenames, people lists, album titles, etc."""
+        label.set_has_tooltip(True)
+        label.connect("query-tooltip", EaselWindow._on_label_query_tooltip)
+
+    @staticmethod
+    def _on_label_query_tooltip(label, x, y, keyboard, tooltip):
+        layout = label.get_layout()
+        if layout is not None and layout.is_ellipsized():
+            tooltip.set_text(label.get_text())
+            return True
+        return False
 
     def _rotate_info(self, delta):
         if self._info_photo_id is None:
