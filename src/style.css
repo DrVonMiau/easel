@@ -713,22 +713,5 @@ window.dark .editor-scale slider {
   background-color: @easel_blue_light;
 }
 
-/* Centre reference: a small white dot at the slider's 0 (neutral) position, so
-   deviation from the original is obvious and no per-slider reset is needed. The
-   mark is added at value 0 in code; here it's styled from GTK's default tick
-   into a dot. GtkScale hides it under the knob while the slider rests at 0. */
-.editor-scale marks {
-  margin-bottom: -6px;                 /* pull the dot down onto the track */
-}
-
-.editor-scale mark {
-  color: transparent;                  /* no default tick line */
-}
-
-.editor-scale mark indicator {
-  min-width: 5px;
-  min-height: 5px;
-  border-radius: 9999px;
-  background-color: #ffffff;
-  box-shadow: 0 1px 2px alpha(#000, 0.35);
-}
+/* The centre-origin dot marking each slider's neutral value is painted by
+   EaselAdjustScale in do_snapshot (on top of the fill), not via CSS marks. */

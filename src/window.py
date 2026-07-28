@@ -24,8 +24,8 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, FilterThumb, Swatch, load_full_texture,
-                      render_adjusted_texture)
+from .widgets import (AdjustableImage, AdjustScale, FilterThumb, Swatch,
+                      load_full_texture, render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -568,7 +568,7 @@ class EaselWindow(Adw.ApplicationWindow):
         menu_btn.connect("clicked", on_menu_clicked)
 
         left = Gtk.GestureClick(button=1)
-        left.connect("pressed", lambda _g, n, x, y: self._tile_pressed(n, box))
+        left.connect("pressed", lambda _g, n, x, y: self._tile_pressed(n, box, x, y))
         box.add_controller(left)
 
         right = Gtk.GestureClick(button=3)
@@ -628,10 +628,19 @@ class EaselWindow(Adw.ApplicationWindow):
         else:
             tile.remove_css_class("tile-selected")
 
-    def _tile_pressed(self, n_press, tile):
+    def _tile_pressed(self, n_press, tile, x=None, y=None):
         photo = tile._photo
         if photo is None:
             return
+        # A press that lands on an overlay control (the heart or the ⋯ menu)
+        # belongs to that button alone — it must not also select the photo or
+        # open the info panel.
+        if x is not None:
+            picked = tile.pick(x, y, Gtk.PickFlags.DEFAULT)
+            while picked is not None and picked is not tile:
+                if picked is tile.fav or picked is tile.menu_btn:
+                    return
+                picked = picked.get_parent()
         if n_press >= 2:
             if self._single_click_source:
                 GLib.source_remove(self._single_click_source)
@@ -1242,12 +1251,8 @@ class EaselWindow(Adw.ApplicationWindow):
             "value-changed", lambda s: self._edit_set("exposure", 1.0 + s.get_value() / 100.0))
         self.edit_temperature.connect(
             "value-changed", lambda s: self._edit_set("temperature", s.get_value() / 100.0))
-        # A dot at the centre (0) of each bipolar slider marks the original,
-        # neutral value — so it's obvious how far an adjustment has moved and
-        # where "no change" is, without a per-slider reset button.
-        for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation,
-                      self.edit_exposure, self.edit_temperature):
-            scale.add_mark(0, Gtk.PositionType.TOP, None)
+        # The centre-origin dot on each slider is drawn by EaselAdjustScale
+        # itself (see widgets.AdjustScale), so no per-scale setup is needed here.
         self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
         self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
         self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
@@ -1366,7 +1371,10 @@ class EaselWindow(Adw.ApplicationWindow):
         if self._edit_texture is None or self._edit_photo is None:
             return
         stem = Path(self._edit_photo).stem
-        dialog = Gtk.FileDialog(initial_name=f"{stem} (edited).jpg")
+        # Saved as PNG: it's the one image encoder that works in the GNOME
+        # runtime without gdk-pixbuf (whose JPEG saver fails — its glycin helper
+        # can't spawn in the sandbox). PNG is lossless, so no re-compression loss.
+        dialog = Gtk.FileDialog(initial_name=f"{stem} (edited).png")
         dialog.save(self, None, self._save_edit_finish)
 
     def _save_edit_finish(self, dialog, result):
@@ -1377,6 +1385,10 @@ class EaselWindow(Adw.ApplicationWindow):
         if not gfile or not gfile.get_path() or self._edit_texture is None:
             return
         dest = gfile.get_path()
+        # The output is PNG regardless of the typed name; keep the extension
+        # honest so nothing ends up as PNG bytes in a .jpg file.
+        if not dest.lower().endswith(".png"):
+            dest = os.path.splitext(dest)[0] + ".png"
         adj = self._edit_image.adjustments()
         self._toast("Saving edited copy…")
         # GSK rendering isn't thread-safe, so render on the main thread. Defer
@@ -1397,29 +1409,11 @@ class EaselWindow(Adw.ApplicationWindow):
                 print("easel: render_adjusted_texture returned None (save)",
                       file=sys.stderr)
                 return False
-            if dest.lower().endswith(".png"):
-                # Reuse the proven texture->PNG path (same as the thumbnail
-                # cache), which avoids gdk-pixbuf entirely.
-                data = out.save_to_png_bytes()
-                with open(dest, "wb") as fh:
-                    fh.write(data.get_data())
-                return True
-            pixbuf = Gdk.pixbuf_get_from_texture(out)
-            if pixbuf is None:
-                print("easel: pixbuf_get_from_texture returned None (save)",
-                      file=sys.stderr)
-                return False
-            # JPEG can't hold an alpha channel; flatten onto white so the saver
-            # never has to guess (the rendered image is fully opaque anyway).
-            if pixbuf.get_has_alpha():
-                flat = GdkPixbuf.Pixbuf.new(
-                    GdkPixbuf.Colorspace.RGB, False, 8,
-                    pixbuf.get_width(), pixbuf.get_height())
-                flat.fill(0xffffffff)
-                pixbuf.composite(flat, 0, 0, pixbuf.get_width(), pixbuf.get_height(),
-                                 0, 0, 1, 1, GdkPixbuf.InterpType.NEAREST, 255)
-                pixbuf = flat
-            pixbuf.savev(dest, "jpeg", ["quality"], ["95"])
+            # Texture -> PNG bytes is the same path the thumbnail cache uses and
+            # is known to work here; gdk-pixbuf savers are not usable (glycin).
+            data = out.save_to_png_bytes()
+            with open(dest, "wb") as fh:
+                fh.write(data.get_data())
             self._copy_metadata(dest)
             return True
         except Exception:
@@ -1428,17 +1422,17 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _copy_metadata(self, dest):
         """Carry the original photo's EXIF (capture date, camera, GPS…) over to
-        the saved JPEG copy, so edits don't strip the info the library organises
-        by. JPEG source -> JPEG copy only; best-effort."""
+        the saved PNG copy via an eXIf chunk, so edits don't strip the info the
+        library organises by. JPEG source only (that's where EXIF lives);
+        best-effort — a failure never affects the already-saved image."""
         src = self._edit_photo
         if not src or not src.lower().endswith((".jpg", ".jpeg")):
             return
-        if not dest.lower().endswith((".jpg", ".jpeg")):
-            return
         try:
-            payload = lib.read_exif_segment(src)
-            if payload:
-                lib.write_jpeg_with_exif(dest, payload)
+            seg = lib.read_exif_segment(src)
+            tiff = lib.exif_tiff_from_segment(seg) if seg else None
+            if tiff:
+                lib.write_png_with_exif(dest, tiff)
         except Exception:
             traceback.print_exc()
 

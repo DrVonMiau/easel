@@ -957,7 +957,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_brightness">
+                                  <object class="EaselAdjustScale" id="edit_brightness">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -985,7 +985,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_contrast">
+                                  <object class="EaselAdjustScale" id="edit_contrast">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1013,7 +1013,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_saturation">
+                                  <object class="EaselAdjustScale" id="edit_saturation">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1041,7 +1041,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_exposure">
+                                  <object class="EaselAdjustScale" id="edit_exposure">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1069,7 +1069,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_temperature">
+                                  <object class="EaselAdjustScale" id="edit_temperature">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">

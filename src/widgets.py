@@ -481,6 +481,45 @@ class FilterThumb(Gtk.Widget):
         snapshot.pop()
 
 
+class AdjustScale(Gtk.Scale):
+    """A GtkScale that paints a small dot at its centre (the neutral/original
+    value) so how far an adjustment has moved is obvious without a reset button.
+
+    The dot is drawn after the base scale, so it sits on top of the blue fill as
+    well as the grey track. It's suppressed while the handle rests at the centre
+    (the handle already marks the origin then, and a dot over it looks odd)."""
+
+    __gtype_name__ = "EaselAdjustScale"
+
+    _DOT_RADIUS = 2.0
+
+    def do_snapshot(self, snapshot):
+        Gtk.Scale.do_snapshot(self, snapshot)
+        adj = self.get_adjustment()
+        if adj is None:
+            return
+        lo, hi = adj.get_lower(), adj.get_upper()
+        span = hi - lo
+        if span <= 0:
+            return
+        mid = (lo + hi) / 2.0
+        # Hidden while the handle is (near) the centre — it covers the spot.
+        if abs(adj.get_value() - mid) / span < 0.03:
+            return
+        width, height = self.get_width(), self.get_height()
+        if width <= 0 or height <= 0:
+            return
+        r = self._DOT_RADIUS
+        rect = Graphene.Rect().init(width / 2.0 - r, height / 2.0 - r, 2 * r, 2 * r)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(rect, r)
+        white = Gdk.RGBA()
+        white.red = white.green = white.blue = white.alpha = 1.0
+        snapshot.push_rounded_clip(rounded)
+        snapshot.append_color(white, rect)
+        snapshot.pop()
+
+
 class Swatch(Gtk.Widget):
     """A square artwork swatch: draws the thumbnail texture (cover-cropped) when
     a path is set, otherwise a diagonal-striped placeholder.

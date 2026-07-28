@@ -9,6 +9,7 @@ import os
 import struct
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "easel"
@@ -295,26 +296,45 @@ def _neutralize_orientation(seg):
     return seg
 
 
-def write_jpeg_with_exif(jpeg_path, exif_payload):
-    """Splice an APP1 Exif segment into an existing baseline JPEG, right after
-    the SOI marker. No-op on any inconsistency so a failed copy never corrupts a
-    successfully-saved image."""
+def exif_tiff_from_segment(seg):
+    """Given an APP1 payload (b'Exif\\x00\\x00' + TIFF) as returned by
+    read_exif_segment, return just the TIFF/Exif stream — what a PNG eXIf chunk
+    stores (the JPEG-only 'Exif\\0\\0' prefix is dropped)."""
+    if not seg or bytes(seg[:6]) != b"Exif\x00\x00":
+        return None
+    return bytes(seg[6:])
+
+
+def _png_chunk(ctype, payload):
+    return (struct.pack(">I", len(payload)) + ctype + payload
+            + struct.pack(">I", zlib.crc32(ctype + payload) & 0xFFFFFFFF))
+
+
+def write_png_with_exif(png_path, exif_tiff):
+    """Insert an eXIf chunk (standardised PNG Exif container) into an existing
+    PNG, right after IHDR, so the edited copy keeps the original's capture
+    date/camera/GPS. No-op on any inconsistency so a failed copy never corrupts
+    the saved image."""
+    if not exif_tiff:
+        return
     try:
-        with open(jpeg_path, "rb") as fh:
+        with open(png_path, "rb") as fh:
             data = fh.read()
     except OSError:
         return
-    if data[:2] != b"\xff\xd8" or not exif_payload:
+    sig = b"\x89PNG\r\n\x1a\n"
+    if data[:8] != sig or len(data) < 8 + 12:
         return
-    seg_len = len(exif_payload) + 2
-    if seg_len > 0xFFFF:  # doesn't fit one APP1 segment
+    ihdr_len = struct.unpack(">I", data[8:12])[0]
+    if data[12:16] != b"IHDR":
         return
-    app1 = b"\xff\xe1" + struct.pack(">H", seg_len) + bytes(exif_payload)
-    tmp = f"{jpeg_path}.exif.tmp"
+    ihdr_end = 16 + ihdr_len + 4  # type(already counted) + data + CRC
+    chunk = _png_chunk(b"eXIf", bytes(exif_tiff))
+    tmp = f"{png_path}.exif.tmp"
     try:
         with open(tmp, "wb") as fh:
-            fh.write(data[:2] + app1 + data[2:])
-        os.replace(tmp, jpeg_path)
+            fh.write(data[:ihdr_end] + chunk + data[ihdr_end:])
+        os.replace(tmp, png_path)
     except OSError:
         try:
             os.remove(tmp)
