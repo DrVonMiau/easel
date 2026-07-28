@@ -435,6 +435,52 @@ class AdjustableImage(Gtk.Widget):
         _snapshot_adjusted(snapshot, self._texture, self._adj, width, height)
 
 
+class FilterThumb(Gtk.Widget):
+    """A small square preview of a texture with one set of colour adjustments
+    baked in — used for the editor's filter chips so each filter shows what it
+    does to the current photo rather than a bare label.
+
+    Only the colour matrix is applied (filters never rotate/flip), and the image
+    is cover-cropped into the square; overflow-hidden + CSS radius round it."""
+
+    __gtype_name__ = "EaselFilterThumb"
+
+    def __init__(self, size=54):
+        super().__init__()
+        self._size = size
+        self._texture = None
+        self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+
+    def do_measure(self, orientation, for_size):
+        return (self._size, self._size, -1, -1)
+
+    def set_source(self, texture, adj):
+        self._texture = texture
+        self._adj = dict(adj)
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot):
+        width, height = self.get_width(), self.get_height()
+        if self._texture is None or width <= 0 or height <= 0:
+            return
+        tw, th = self._texture.get_width(), self._texture.get_height()
+        if tw <= 0 or th <= 0:
+            return
+        matrix, offset = _adjust_color_matrix(
+            self._adj["brightness"], self._adj["contrast"], self._adj["saturation"],
+            self._adj.get("exposure", 1.0), self._adj.get("temperature", 0.0),
+            self._adj.get("tone", "none"))
+        # content-fit: cover — scale to fill the square, centre-crop.
+        scale = max(width / tw, height / th)
+        dw, dh = tw * scale, th * scale
+        snapshot.push_color_matrix(matrix, offset)
+        snapshot.append_texture(
+            self._texture,
+            Graphene.Rect().init((width - dw) / 2, (height - dh) / 2, dw, dh))
+        snapshot.pop()
+
+
 class Swatch(Gtk.Widget):
     """A square artwork swatch: draws the thumbnail texture (cover-cropped) when
     a path is set, otherwise a diagonal-striped placeholder.

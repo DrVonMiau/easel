@@ -14,7 +14,9 @@ EXIF GPS and face detection respectively.
 """
 import json
 import os
+import sys
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, Swatch, load_full_texture,
+from .widgets import (AdjustableImage, FilterThumb, Swatch, load_full_texture,
                       render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
@@ -1085,6 +1087,26 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
+        # Opening the panel narrows the grid, which reflows the columns and can
+        # push the photo you just clicked off-screen. Scroll it back into view so
+        # the selection is never "lost".
+        self._scroll_grid_to_photo(photo_id)
+
+    def _scroll_grid_to_photo(self, photo_id):
+        grid, source = {
+            "all_photos": (self.photo_grid, self._visible_photos),
+            "favourites": (self.fav_grid, self._visible_favs),
+            "detail": (self.detail_photos_grid, self._detail_photos),
+        }.get(self.view, (None, None))
+        if grid is None or not hasattr(grid, "scroll_to"):
+            return
+        for i, p in enumerate(source):
+            if p.id == photo_id:
+                try:
+                    grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)
+                except Exception:
+                    pass
+                return
 
     def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
@@ -1213,6 +1235,12 @@ class EaselWindow(Adw.ApplicationWindow):
             "value-changed", lambda s: self._edit_set("exposure", 1.0 + s.get_value() / 100.0))
         self.edit_temperature.connect(
             "value-changed", lambda s: self._edit_set("temperature", s.get_value() / 100.0))
+        # A dot at the centre (0) of each bipolar slider marks the original,
+        # neutral value — so it's obvious how far an adjustment has moved and
+        # where "no change" is, without a per-slider reset button.
+        for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation,
+                      self.edit_exposure, self.edit_temperature):
+            scale.add_mark(0, Gtk.PositionType.TOP, None)
         self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
         self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
         self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
@@ -1223,10 +1251,37 @@ class EaselWindow(Adw.ApplicationWindow):
             "sepia": self.edit_filter_sepia,
             "warm": self.edit_filter_warm,
         }
+        # Each filter chip carries a live thumbnail of the current photo under
+        # that filter (set when the editor opens) plus its name below.
+        self._edit_filter_thumbs = {}
+        filter_labels = {"original": "Original", "mono": "B&W",
+                         "sepia": "Sepia", "warm": "Warm"}
         for name, btn in self._edit_filter_btns.items():
+            thumb = FilterThumb(size=54)
+            thumb.add_css_class("filter-thumb")
+            label = Gtk.Label(label=filter_labels[name], css_classes=["filter-thumb-label"])
+            chip = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                           halign=Gtk.Align.CENTER)
+            chip.append(thumb)
+            chip.append(label)
+            btn.set_child(chip)
+            self._edit_filter_thumbs[name] = thumb
             btn.connect("clicked", lambda _b, n=name: self._apply_filter(n))
         self.edit_cancel_btn.connect("clicked", lambda *_: self._close_editor())
         self.edit_save_btn.connect("clicked", lambda *_: self._save_edit())
+
+    def _filter_adj(self, name):
+        """The adjustment dict a named filter preset represents (slider space ->
+        matrix inputs), used to render its preview thumbnail."""
+        b, c, s, e, t, tone = self._FILTERS[name]
+        return {"brightness": b / 200.0, "contrast": 1.0 + c / 100.0,
+                "saturation": 1.0 + s / 100.0, "exposure": 1.0 + e / 100.0,
+                "temperature": t / 100.0, "tone": tone,
+                "flip_h": False, "flip_v": False, "rotation": 0}
+
+    def _refresh_filter_thumbs(self):
+        for name, thumb in getattr(self, "_edit_filter_thumbs", {}).items():
+            thumb.set_source(self._edit_texture, self._filter_adj(name))
 
     def _edit_set(self, name, value):
         if self._edit_image is not None:
@@ -1250,6 +1305,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_texture = texture
         self._reset_editor()
         self._edit_image.set_texture(texture)
+        self._refresh_filter_thumbs()
         # Start from the photo's stored display rotation so the editor matches
         # what's shown everywhere else; saving bakes it into the copy.
         rotation = (row["rotation"] or 0) if "rotation" in row.keys() else 0
@@ -1325,18 +1381,59 @@ class EaselWindow(Adw.ApplicationWindow):
         return False
 
     def _render_and_save(self, dest, adj):
+        # Failures here used to be swallowed silently — the user just saw
+        # "Couldn't save". Log the real reason to stderr so a packaged-runtime
+        # problem is diagnosable, and keep going defensively.
         try:
             out = render_adjusted_texture(self._edit_texture, adj)
             if out is None:
+                print("easel: render_adjusted_texture returned None (save)",
+                      file=sys.stderr)
                 return False
-            pixbuf = Gdk.pixbuf_get_from_texture(out)
             if dest.lower().endswith(".png"):
-                pixbuf.savev(dest, "png", [], [])
-            else:
-                pixbuf.savev(dest, "jpeg", ["quality"], ["95"])
+                # Reuse the proven texture->PNG path (same as the thumbnail
+                # cache), which avoids gdk-pixbuf entirely.
+                data = out.save_to_png_bytes()
+                with open(dest, "wb") as fh:
+                    fh.write(data.get_data())
+                return True
+            pixbuf = Gdk.pixbuf_get_from_texture(out)
+            if pixbuf is None:
+                print("easel: pixbuf_get_from_texture returned None (save)",
+                      file=sys.stderr)
+                return False
+            # JPEG can't hold an alpha channel; flatten onto white so the saver
+            # never has to guess (the rendered image is fully opaque anyway).
+            if pixbuf.get_has_alpha():
+                flat = GdkPixbuf.Pixbuf.new(
+                    GdkPixbuf.Colorspace.RGB, False, 8,
+                    pixbuf.get_width(), pixbuf.get_height())
+                flat.fill(0xffffffff)
+                pixbuf.composite(flat, 0, 0, pixbuf.get_width(), pixbuf.get_height(),
+                                 0, 0, 1, 1, GdkPixbuf.InterpType.NEAREST, 255)
+                pixbuf = flat
+            pixbuf.savev(dest, "jpeg", ["quality"], ["95"])
+            self._copy_metadata(dest)
             return True
         except Exception:
+            traceback.print_exc()
             return False
+
+    def _copy_metadata(self, dest):
+        """Carry the original photo's EXIF (capture date, camera, GPS…) over to
+        the saved JPEG copy, so edits don't strip the info the library organises
+        by. JPEG source -> JPEG copy only; best-effort."""
+        src = self._edit_photo
+        if not src or not src.lower().endswith((".jpg", ".jpeg")):
+            return
+        if not dest.lower().endswith((".jpg", ".jpeg")):
+            return
+        try:
+            payload = lib.read_exif_segment(src)
+            if payload:
+                lib.write_jpeg_with_exif(dest, payload)
+        except Exception:
+            traceback.print_exc()
 
     def _after_save(self, ok, dest):
         if not ok:

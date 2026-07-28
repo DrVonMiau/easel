@@ -143,7 +143,7 @@ these before inventing new styling.
 | Quick action | `.info-action` / `.info-fs-btn` | `GtkButton` | Five equal-width filled buttons (44px, radius 10): grey secondary + blue primary (fullscreen) |
 | Metadata row | `.info-key` / `.info-value` | `GtkLabel` | Blue mono key (left) · dim mono value (right) |
 | Lightbox | `.lightbox`, `.lightbox-nav`, `.lightbox-btn`, `.lightbox-caption` | overlay | Full-window dark viewer |
-| Editor | `.editor`, `.editor-panel`, `.editor-scale`, `.editor-tool-btn`, `.editor-filter` | overlay | Paper + tools panel: Adjust sliders (brightness, contrast, saturation, exposure, temperature), Transform row (rotate, crop, flip), Filter chips |
+| Editor | `.editor`, `.editor-panel`, `.editor-scale`, `.editor-tool-btn`, `.editor-filter` | overlay | Paper + tools panel: Adjust sliders (brightness, contrast, saturation, exposure, temperature) with a white centre dot marking the neutral origin, Transform row (rotate, crop, flip), Filter chips that preview the photo under each filter (`.filter-thumb`) |
 
 ---
 

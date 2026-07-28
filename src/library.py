@@ -229,6 +229,99 @@ def _exif_datetime(path):
     return None
 
 
+def read_exif_segment(path):
+    """Return the raw APP1 payload (starting b'Exif\\x00\\x00') of a JPEG, ready
+    to be spliced into another JPEG, or None if there's none to copy.
+
+    The photo's on-screen orientation is baked into Easel's edited pixels, so the
+    copied metadata's Orientation tag is neutralised to 1 — otherwise a viewer
+    would rotate the already-upright copy a second time. Everything else
+    (capture date, camera, GPS, …) is preserved verbatim for organisation."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(256 * 1024)
+    except OSError:
+        return None
+    if head[:2] != b"\xff\xd8":  # not a JPEG
+        return None
+    i = 2
+    while i + 4 <= len(head):
+        if head[i] != 0xFF:
+            break
+        marker = head[i + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", head[i + 2:i + 4])[0]
+        seg = head[i + 4:i + 2 + seg_len]
+        if marker == 0xE1 and seg[:6] == b"Exif\x00\x00":
+            # Only usable if we captured the whole segment.
+            if len(seg) != seg_len - 2:
+                return None
+            return _neutralize_orientation(bytearray(seg))
+        if marker == 0xDA:  # start of scan — no metadata past here
+            break
+        i += 2 + seg_len
+    return None
+
+
+def _neutralize_orientation(seg):
+    """Set the EXIF Orientation tag (IFD0 tag 0x0112) to 1 in-place, if present.
+    `seg` is the APP1 payload beginning with b'Exif\\x00\\x00'. Returns `seg`."""
+    exif = seg[6:]  # skip "Exif\0\0" -> TIFF header
+    if len(exif) < 8:
+        return seg
+    bo = "<" if exif[:2] == b"II" else ">" if exif[:2] == b"MM" else None
+    if bo is None:
+        return seg
+    try:
+        ifd0 = struct.unpack(bo + "I", exif[4:8])[0]
+        if ifd0 <= 0 or ifd0 + 2 > len(exif):
+            return seg
+        count = struct.unpack(bo + "H", exif[ifd0:ifd0 + 2])[0]
+        entry = ifd0 + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            tag = struct.unpack(bo + "H", exif[entry:entry + 2])[0]
+            if tag == 0x0112:  # Orientation (SHORT, inline value at entry+8)
+                one = struct.pack(bo + "H", 1)
+                # seg = "Exif\0\0" (6 bytes) + exif; value sits at exif[entry+8].
+                seg[6 + entry + 8:6 + entry + 10] = one
+                break
+            entry += 12
+    except struct.error:
+        pass
+    return seg
+
+
+def write_jpeg_with_exif(jpeg_path, exif_payload):
+    """Splice an APP1 Exif segment into an existing baseline JPEG, right after
+    the SOI marker. No-op on any inconsistency so a failed copy never corrupts a
+    successfully-saved image."""
+    try:
+        with open(jpeg_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return
+    if data[:2] != b"\xff\xd8" or not exif_payload:
+        return
+    seg_len = len(exif_payload) + 2
+    if seg_len > 0xFFFF:  # doesn't fit one APP1 segment
+        return
+    app1 = b"\xff\xe1" + struct.pack(">H", seg_len) + bytes(exif_payload)
+    tmp = f"{jpeg_path}.exif.tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data[:2] + app1 + data[2:])
+        os.replace(tmp, jpeg_path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 def _file_created(path):
     """Filesystem creation (birth) time if the platform exposes it, else None."""
     try:

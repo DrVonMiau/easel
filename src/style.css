@@ -641,13 +641,11 @@ window.dark .editor {
   background-color: alpha(@window_fg_color, 0.05);
 }
 
-/* Filter chips — filled secondary; the selected one gets a blue ring. */
+/* Filter chips — each a live thumbnail of the photo under that filter plus its
+   name; the selected one gets a blue ring. */
 .editor-filter {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  min-height: 44px;
-  padding: 0 4px;
-  border-radius: 4px;
+  padding: 6px;
+  border-radius: 8px;
   color: @window_fg_color;
   background-color: alpha(@window_fg_color, 0.10);
   border: none;
@@ -664,6 +662,18 @@ window.dark .editor {
 
 window.dark .editor-filter.selected {
   box-shadow: inset 0 0 0 2px @easel_blue_light;
+}
+
+/* The preview swatch inside a filter chip: rounded, faint placeholder tint. */
+.filter-thumb {
+  border-radius: 6px;
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.filter-thumb-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: @window_fg_color;
 }
 
 /* Full-width slider — same look as the titlebar thumb slider. */
@@ -701,4 +711,24 @@ window.dark .editor-filter.selected {
 window.dark .editor-scale highlight,
 window.dark .editor-scale slider {
   background-color: @easel_blue_light;
+}
+
+/* Centre reference: a small white dot at the slider's 0 (neutral) position, so
+   deviation from the original is obvious and no per-slider reset is needed. The
+   mark is added at value 0 in code; here it's styled from GTK's default tick
+   into a dot. GtkScale hides it under the knob while the slider rests at 0. */
+.editor-scale marks {
+  margin-bottom: -6px;                 /* pull the dot down onto the track */
+}
+
+.editor-scale mark {
+  color: transparent;                  /* no default tick line */
+}
+
+.editor-scale mark indicator {
+  min-width: 5px;
+  min-height: 5px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px alpha(#000, 0.35);
 }
