@@ -6,6 +6,10 @@
   <menu id="primary_menu">
     <section>
       <item>
+        <attribute name="label" translatable="yes">Add Photos…</attribute>
+        <attribute name="action">win.add-photos</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Add Photo Folder…</attribute>
         <attribute name="action">win.add-folder</attribute>
       </item>
@@ -168,32 +172,6 @@
                         <child>
                           <object class="GtkButton" id="tab_years">
                             <property name="label" translatable="yes">Years</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label">|</property>
-                            <style>
-                              <class name="tab-sep"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_people">
-                            <property name="label" translatable="yes">People</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_maps">
-                            <property name="label" translatable="yes">Maps</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -489,32 +467,6 @@
                                 </style>
                               </object>
                             </property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">maps</property>
-                        <property name="child">
-                          <object class="AdwStatusPage">
-                            <property name="icon-name">map-symbolic</property>
-                            <property name="title" translatable="yes">Maps</property>
-                            <property name="description" translatable="yes">Photos placed on a map by their location. Coming soon — this reads GPS from each photo's metadata.</property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">people</property>
-                        <property name="child">
-                          <object class="AdwStatusPage">
-                            <property name="icon-name">system-users-symbolic</property>
-                            <property name="title" translatable="yes">People</property>
-                            <property name="description" translatable="yes">Photos grouped by the people in them. Coming soon — this needs on-device face detection.</property>
                           </object>
                         </property>
                       </object>
@@ -878,7 +830,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="edit_save_btn">
-                            <property name="label" translatable="yes">Save</property>
+                            <property name="label" translatable="yes">Save Image</property>
                             <property name="valign">center</property>
                             <style>
                               <class name="editor-save"/>
@@ -923,10 +875,18 @@
                       <object class="GtkScrolledWindow">
                         <property name="hscrollbar-policy">never</property>
                         <property name="width-request">300</property>
+                        <property name="hexpand">false</property>
+                        <property name="overlay-scrolling">true</property>
+                        <property name="propagate-natural-width">false</property>
                         <style>
                           <class name="om-scroll"/>
                         </style>
                         <property name="child">
+                          <object class="GtkBox" id="edit_tools_wrap">
+                            <property name="orientation">vertical</property>
+                            <property name="width-request">300</property>
+                            <property name="hexpand">false</property>
+                          <child>
                           <object class="GtkBox" id="edit_tools">
                             <property name="orientation">vertical</property>
                             <property name="spacing">16</property>
@@ -957,7 +917,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_brightness">
+                                  <object class="EaselAdjustScale" id="edit_brightness">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -985,7 +945,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_contrast">
+                                  <object class="EaselAdjustScale" id="edit_contrast">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1013,7 +973,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_saturation">
+                                  <object class="EaselAdjustScale" id="edit_saturation">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1041,7 +1001,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_exposure">
+                                  <object class="EaselAdjustScale" id="edit_exposure">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1069,7 +1029,7 @@
                                   </object>
                                 </child>
                                 <child>
-                                  <object class="GtkScale" id="edit_temperature">
+                                  <object class="EaselAdjustScale" id="edit_temperature">
                                     <property name="draw-value">false</property>
                                     <property name="adjustment">
                                       <object class="GtkAdjustment">
@@ -1116,8 +1076,7 @@
                                 <child>
                                   <object class="GtkButton" id="edit_crop_btn">
                                     <property name="icon-name">easel-crop-symbolic</property>
-                                    <property name="sensitive">false</property>
-                                    <property name="tooltip-text" translatable="yes">Crop — coming soon</property>
+                                    <property name="tooltip-text" translatable="yes">Crop</property>
                                     <style><class name="editor-tool-btn"/></style>
                                   </object>
                                 </child>
@@ -1149,35 +1108,29 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkBox">
-                                <property name="spacing">8</property>
+                              <object class="GtkFlowBox" id="edit_filter_flow">
+                                <property name="selection-mode">none</property>
                                 <property name="homogeneous">true</property>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_original">
-                                    <property name="label" translatable="yes">Original</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_mono">
-                                    <property name="label" translatable="yes">B&amp;W</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_sepia">
-                                    <property name="label" translatable="yes">Sepia</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_warm">
-                                    <property name="label" translatable="yes">Warm</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
+                                <property name="min-children-per-line">4</property>
+                                <property name="max-children-per-line">4</property>
+                                <property name="column-spacing">8</property>
+                                <property name="row-spacing">8</property>
+                                <style><class name="editor-filters"/></style>
                               </object>
                             </child>
+                          </object>
+                          </child>
+                          <child>
+                            <object class="GtkBox" id="edit_crop_panel">
+                              <property name="orientation">vertical</property>
+                              <property name="spacing">16</property>
+                              <property name="margin-bottom">24</property>
+                              <property name="visible">false</property>
+                              <style>
+                                <class name="editor-panel"/>
+                              </style>
+                            </object>
+                          </child>
                           </object>
                         </property>
                       </object>

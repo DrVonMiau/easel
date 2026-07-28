@@ -134,7 +134,7 @@ these before inventing new styling.
 | `.tabs` (group) | `.tab-group` | `GtkBox` | One rounded container holding every tab |
 | tab separator | `.tab-sep` | `GtkLabel` | Dim `\|` between tab groups |
 | `.photo_tumbnail` | `.swatch`, `.card-swatch` | `EaselSwatch` | Square, radius 10, cover-cropped; striped placeholder when empty |
-| — heart overlay | `.tile-fav` / `.tile-fav.faved` | `GtkButton` | White on dark badge → gold when favourited |
+| — heart overlay | `.tile-fav` / `.tile-fav.faved` | `GtkButton` | Outline heart (white on dark badge) → filled heart tinted gold when favourited |
 | — menu overlay | `.card-menu-btn` | `GtkButton` | Circular, dark scrim |
 | — video badge | `.video-badge` | `GtkImage` | Centred play glyph |
 | Search | `.search-entry` | `GtkSearchEntry` | Mono, radius 8, blue focus border |
@@ -143,7 +143,9 @@ these before inventing new styling.
 | Quick action | `.info-action` / `.info-fs-btn` | `GtkButton` | Five equal-width filled buttons (44px, radius 10): grey secondary + blue primary (fullscreen) |
 | Metadata row | `.info-key` / `.info-value` | `GtkLabel` | Blue mono key (left) · dim mono value (right) |
 | Lightbox | `.lightbox`, `.lightbox-nav`, `.lightbox-btn`, `.lightbox-caption` | overlay | Full-window dark viewer |
-| Editor | `.editor`, `.editor-panel`, `.editor-scale`, `.editor-tool-btn`, `.editor-filter` | overlay | Paper + tools panel: Adjust sliders (brightness, contrast, saturation, exposure, temperature), Transform row (rotate, crop, flip), Filter chips |
+| Editor | `.editor`, `.editor-panel`, `.editor-scale`, `.editor-tool-btn`, `.editor-filter` | overlay | Paper + tools panel: Adjust sliders (brightness, contrast, saturation, exposure, temperature) with a white centre dot marking the neutral origin, Transform row (rotate, interactive crop, flip), Filter chips in a wrapping flow that preview the photo under each filter (`.filter-thumb`; Original/B&W/Sepia/Warm/Cool/Vivid/Fade/Noir) |
+| Crop overlay | `EaselCropOverlay` | overlay | Drag-handle crop rectangle over the canvas: dim outside, rule-of-thirds guides, corner + edge handles (corners only when an aspect is locked), hand cursor only over grabbable spots. Stored normalised in display space, applied to the exported image on save |
+| Crop sub-mode | `edit_crop_panel` | panel | Entering crop swaps the adjust panel + header Cancel/Save Image for a crop panel: aspect-ratio chips (Free/Original/1:1/4:3/3:2/16:9/4:5/9:16), a Straighten slider (fine rotation with auto zoom-to-fill), and Cancel/Apply that return to adjust mode |
 
 ---
 

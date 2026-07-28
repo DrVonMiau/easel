@@ -14,7 +14,9 @@ EXIF GPS and face detection respectively.
 """
 import json
 import os
+import sys
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -22,8 +24,8 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, Swatch, load_full_texture,
-                      render_adjusted_texture)
+from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FilterThumb,
+                      Swatch, load_full_texture, render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -50,7 +52,8 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites", "maps", "people")
+# (Maps + People are deferred until GPS/face-detection land.)
+VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -126,8 +129,6 @@ class EaselWindow(Adw.ApplicationWindow):
     tab_years = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
     tab_favourites = Gtk.Template.Child()
-    tab_maps = Gtk.Template.Child()
-    tab_people = Gtk.Template.Child()
     search_entry = Gtk.Template.Child()
 
     paper_stack = Gtk.Template.Child()
@@ -179,10 +180,9 @@ class EaselWindow(Adw.ApplicationWindow):
     edit_crop_btn = Gtk.Template.Child()
     edit_flip_h_btn = Gtk.Template.Child()
     edit_flip_v_btn = Gtk.Template.Child()
-    edit_filter_original = Gtk.Template.Child()
-    edit_filter_mono = Gtk.Template.Child()
-    edit_filter_sepia = Gtk.Template.Child()
-    edit_filter_warm = Gtk.Template.Child()
+    edit_filter_flow = Gtk.Template.Child()
+    edit_tools = Gtk.Template.Child()
+    edit_crop_panel = Gtk.Template.Child()
 
     PANEL_WIDTH = 300
 
@@ -215,6 +215,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_image = None
         self._edit_texture = None
         self._edit_photo = None
+        self._edit_photo_id = None
+        self._crop_backup = None
+        self._applied_crop = None
 
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
@@ -225,8 +228,6 @@ class EaselWindow(Adw.ApplicationWindow):
             "years": self.tab_years,
             "albums": self.tab_albums,
             "favourites": self.tab_favourites,
-            "maps": self.tab_maps,
-            "people": self.tab_people,
         }
 
         self._setup_actions()
@@ -249,6 +250,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._restore_state()
         self._reload_all()
         self._setup_watching()
+        self._setup_dnd()
         self._setup_titlebar_sides()
         self._apply_pointer_cursors()
 
@@ -411,6 +413,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _setup_actions(self):
         for name, handler in (
             ("add-folder", lambda *_a: self._on_add_folder()),
+            ("add-photos", lambda *_a: self._on_add_photos()),
             ("rescan", lambda *_a: self._on_rescan()),
             ("new-album", lambda *_a: self._on_new_album()),
             ("preferences", lambda *_a: self._on_preferences()),
@@ -420,6 +423,10 @@ class EaselWindow(Adw.ApplicationWindow):
             act = Gio.SimpleAction.new(name, None)
             act.connect("activate", handler)
             self.add_action(act)
+
+        use_edited = Gio.SimpleAction.new("use-edited", GLib.VariantType.new("s"))
+        use_edited.connect("activate", self._on_use_edited)
+        self.add_action(use_edited)
 
         for i, tab in enumerate(VIEW_NAMES, start=1):
             act = Gio.SimpleAction.new(f"tab-{i}", None)
@@ -537,36 +544,34 @@ class EaselWindow(Adw.ApplicationWindow):
         play.set_visible(False)
         overlay.add_overlay(play)
 
-        menu_btn = Gtk.Button(icon_name="easel-more-symbolic", halign=Gtk.Align.END,
-                              valign=Gtk.Align.START, margin_top=12, margin_end=12,
-                              tooltip_text="More", css_classes=["card-menu-btn"])
-        menu_btn.set_visible(False)
-        menu_btn.set_cursor(POINTER_CURSOR)
-        overlay.add_overlay(menu_btn)
+        # Top-right control opens the photo full screen — clicking a photo
+        # already surfaces its actions in the info panel, so a quick "view big"
+        # button is more useful here than the old ⋯ menu (right-click still has
+        # the full menu).
+        fs_btn = Gtk.Button(icon_name="easel-maximize-symbolic", halign=Gtk.Align.END,
+                            valign=Gtk.Align.START, margin_top=12, margin_end=12,
+                            tooltip_text="View full screen", css_classes=["card-menu-btn"])
+        fs_btn.set_visible(False)
+        fs_btn.set_cursor(POINTER_CURSOR)
+        fs_btn.connect("clicked", lambda _b: self._open_photo_by_id(box._photo.id)
+                       if box._photo else None)
+        overlay.add_overlay(fs_btn)
 
         box.append(overlay)
-        box.swatch, box.fav, box.menu_btn = swatch, fav, menu_btn
+        box.swatch, box.fav, box.fs_btn = swatch, fav, fs_btn
         box.play = play
         box._photo = None
         box._source = "photos"
-        box._menu_open = False
 
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", lambda *_a: (box.fav.set_visible(True),
-                                             box.menu_btn.set_visible(True)))
+                                             box.fs_btn.set_visible(True)))
         motion.connect("leave", lambda *_a: self._tile_unhover(box))
         box.add_controller(motion)
         box._motion = motion
 
-        def on_menu_clicked(btn):
-            box._menu_open = True
-            popover = self._show_item_menu(box, btn, btn.get_width() / 2, btn.get_height())
-            popover.connect("closed", lambda _p: self._tile_menu_closed(box))
-
-        menu_btn.connect("clicked", on_menu_clicked)
-
         left = Gtk.GestureClick(button=1)
-        left.connect("pressed", lambda _g, n, x, y: self._tile_pressed(n, box))
+        left.connect("pressed", lambda _g, n, x, y: self._tile_pressed(n, box, x, y))
         box.add_controller(left)
 
         right = Gtk.GestureClick(button=3)
@@ -578,21 +583,19 @@ class EaselWindow(Adw.ApplicationWindow):
         return box
 
     @staticmethod
+    def _heart_icon(fav):
+        # Filled (gold) heart once favourited; outline heart otherwise.
+        return "easel-heart-filled-symbolic" if fav else "easel-heart-symbolic"
+
+    @staticmethod
     def _tile_faved(box):
         return box._photo is not None and box._photo.favorite
 
     def _tile_unhover(self, box):
-        # The heart stays visible for favourited photos; the menu button hides
-        # unless its popover is open.
+        # The heart stays visible for favourited photos; the fullscreen button
+        # only shows on hover.
         box.fav.set_visible(self._tile_faved(box))
-        if not box._menu_open:
-            box.menu_btn.set_visible(False)
-
-    def _tile_menu_closed(self, box):
-        box._menu_open = False
-        if not box._motion.get_property("contains-pointer"):
-            box.menu_btn.set_visible(False)
-            box.fav.set_visible(self._tile_faved(box))
+        box.fs_btn.set_visible(False)
 
     def _bind_tile(self, tile, photo, source_name):
         tile._photo = photo
@@ -606,8 +609,10 @@ class EaselWindow(Adw.ApplicationWindow):
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
-        # Favourite heart: shown (gold) when faved; hover reveals it otherwise.
+        # Favourite heart: filled + gold when faved (always shown); outline on
+        # hover otherwise.
         tile.fav.set_visible(photo.favorite or tile._motion.get_property("contains-pointer"))
+        tile.fav.set_icon_name(self._heart_icon(photo.favorite))
         if photo.favorite:
             tile.fav.add_css_class("faved")
         else:
@@ -619,10 +624,19 @@ class EaselWindow(Adw.ApplicationWindow):
         else:
             tile.remove_css_class("tile-selected")
 
-    def _tile_pressed(self, n_press, tile):
+    def _tile_pressed(self, n_press, tile, x=None, y=None):
         photo = tile._photo
         if photo is None:
             return
+        # A press that lands on an overlay control (the heart or fullscreen
+        # button) belongs to that button alone — it must not also select the
+        # photo or open the info panel.
+        if x is not None:
+            picked = tile.pick(x, y, Gtk.PickFlags.DEFAULT)
+            while picked is not None and picked is not tile:
+                if picked is tile.fav or picked is tile.fs_btn:
+                    return
+                picked = picked.get_parent()
         if n_press >= 2:
             if self._single_click_source:
                 GLib.source_remove(self._single_click_source)
@@ -1085,6 +1099,26 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
+        # Opening the panel narrows the grid, which reflows the columns and can
+        # push the photo you just clicked off-screen. Scroll it back into view so
+        # the selection is never "lost".
+        self._scroll_grid_to_photo(photo_id)
+
+    def _scroll_grid_to_photo(self, photo_id):
+        grid, source = {
+            "all_photos": (self.photo_grid, self._visible_photos),
+            "favourites": (self.fav_grid, self._visible_favs),
+            "detail": (self.detail_photos_grid, self._detail_photos),
+        }.get(self.view, (None, None))
+        if grid is None or not hasattr(grid, "scroll_to"):
+            return
+        for i, p in enumerate(source):
+            if p.id == photo_id:
+                try:
+                    grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)
+                except Exception:
+                    pass
+                return
 
     def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
@@ -1200,7 +1234,14 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _setup_editor(self):
         self._edit_image = AdjustableImage()
-        self.edit_image_slot.append(self._edit_image)
+        # The crop rectangle lives in an overlay on top of the canvas so it
+        # shares the image's exact allocation and lines up with it.
+        self._crop_overlay = CropOverlay()
+        self._crop_mode = False
+        edit_overlay = Gtk.Overlay(hexpand=True, vexpand=True)
+        edit_overlay.set_child(self._edit_image)
+        edit_overlay.add_overlay(self._crop_overlay)
+        self.edit_image_slot.append(edit_overlay)
         # Slider value (−100..100) -> adjustment. Brightness is additive (±0.5);
         # contrast and saturation are factors around 1.0.
         self.edit_brightness.connect(
@@ -1213,24 +1254,211 @@ class EaselWindow(Adw.ApplicationWindow):
             "value-changed", lambda s: self._edit_set("exposure", 1.0 + s.get_value() / 100.0))
         self.edit_temperature.connect(
             "value-changed", lambda s: self._edit_set("temperature", s.get_value() / 100.0))
-        self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
-        self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
+        # The centre-origin dot on each slider is drawn by EaselAdjustScale
+        # itself (see widgets.AdjustScale), so no per-scale setup is needed here.
+        self.edit_rotate_left_btn.connect("clicked", lambda *_: self._editor_rotate(-90))
+        self.edit_rotate_right_btn.connect("clicked", lambda *_: self._editor_rotate(90))
         self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
         self.edit_flip_v_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("v"))
-        self._edit_filter_btns = {
-            "original": self.edit_filter_original,
-            "mono": self.edit_filter_mono,
-            "sepia": self.edit_filter_sepia,
-            "warm": self.edit_filter_warm,
-        }
-        for name, btn in self._edit_filter_btns.items():
+        self.edit_crop_btn.set_sensitive(True)
+        self.edit_crop_btn.set_tooltip_text("Crop")
+        self.edit_crop_btn.connect("clicked", lambda *_: self._enter_crop())
+        self._build_crop_panel()
+        # Each filter chip carries a live thumbnail of the current photo under
+        # that filter (set when the editor opens) plus its name below; built into
+        # a wrapping flow so the set can grow without overflowing the panel.
+        self._edit_filter_btns = {}
+        self._edit_filter_thumbs = {}
+        for name in self._FILTER_ORDER:
+            thumb = FilterThumb(size=54)
+            thumb.add_css_class("filter-thumb")
+            label = Gtk.Label(label=self._FILTER_LABELS[name],
+                              css_classes=["filter-thumb-label"])
+            chip = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                           halign=Gtk.Align.CENTER)
+            chip.append(thumb)
+            chip.append(label)
+            btn = Gtk.Button(css_classes=["editor-filter"])
+            btn.set_child(chip)
+            btn.set_cursor(POINTER_CURSOR)
             btn.connect("clicked", lambda _b, n=name: self._apply_filter(n))
+            self.edit_filter_flow.insert(btn, -1)
+            self._edit_filter_btns[name] = btn
+            self._edit_filter_thumbs[name] = thumb
         self.edit_cancel_btn.connect("clicked", lambda *_: self._close_editor())
         self.edit_save_btn.connect("clicked", lambda *_: self._save_edit())
+
+    def _filter_adj(self, name):
+        """The adjustment dict a named filter preset represents (slider space ->
+        matrix inputs), used to render its preview thumbnail."""
+        b, c, s, e, t, tone = self._FILTERS[name]
+        return {"brightness": b / 200.0, "contrast": 1.0 + c / 100.0,
+                "saturation": 1.0 + s / 100.0, "exposure": 1.0 + e / 100.0,
+                "temperature": t / 100.0, "tone": tone,
+                "flip_h": False, "flip_v": False, "rotation": 0}
+
+    def _refresh_filter_thumbs(self):
+        for name, thumb in getattr(self, "_edit_filter_thumbs", {}).items():
+            thumb.set_source(self._edit_texture, self._filter_adj(name))
 
     def _edit_set(self, name, value):
         if self._edit_image is not None:
             self._edit_image.set_adjustment(name, value)
+
+    @staticmethod
+    def _rotate_crop(crop, degrees):
+        """Map a normalised (x, y, w, h) crop through a 90° image rotation so it
+        keeps framing the same content."""
+        if not crop:
+            return None
+        x, y, w, h = crop
+        d = degrees % 360
+        if d == 90:    # clockwise
+            return (1 - y - h, x, h, w)
+        if d == 270:   # counter-clockwise
+            return (y, 1 - x - w, h, w)
+        if d == 180:
+            return (1 - x - w, 1 - y - h, w, h)
+        return crop
+
+    def _editor_rotate(self, degrees):
+        self._edit_image.rotate(degrees)
+        # Rotate the crop with the image so the preview persists. The displayed
+        # aspect swaps, so drop any aspect lock (its ratio no longer matches).
+        self._applied_crop = self._rotate_crop(self._applied_crop, degrees)
+        self._editor_geometry_changed()
+        self._crop_overlay.set_aspect_ratio(None)
+        self._aspect_label = "Free"
+        self._highlight_aspect()
+        if self._applied_crop:
+            x, y, w, h = self._applied_crop
+            self._crop_overlay.set_crop(x, y, x + w, y + h)
+        else:
+            self._crop_overlay.reset()
+        self._edit_image.set_crop(self._applied_crop)
+
+    def _display_dims(self):
+        """The displayed image's pixel dimensions (post 90° rotation)."""
+        tex = self._edit_texture
+        if tex is None:
+            return (1.0, 1.0)
+        tw, th = tex.get_width(), tex.get_height()
+        rot = self._edit_image.adjustments()["rotation"] % 360
+        return (th, tw) if rot in (90, 270) else (tw, th)
+
+    def _editor_geometry_changed(self, reset_crop=False):
+        """Keep the crop overlay's fit in step with the displayed image (its
+        aspect flips on 90/270 rotation)."""
+        if self._crop_overlay is None:
+            return
+        self._crop_overlay.set_display_size(*self._display_dims())
+        if reset_crop:
+            self._crop_overlay.reset()
+
+    # Common output aspect ratios (width:height); None = free-form.
+    _ASPECTS = (("Free", None), ("Original", "original"), ("1:1", (1, 1)),
+                ("4:3", (4, 3)), ("3:2", (3, 2)), ("16:9", (16, 9)),
+                ("4:5", (4, 5)), ("9:16", (9, 16)))
+
+    def _build_crop_panel(self):
+        panel = self.edit_crop_panel
+        panel.append(Gtk.Label(label="Aspect Ratio", xalign=0,
+                               css_classes=["editor-eyebrow"]))
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                           min_children_per_line=4, max_children_per_line=4,
+                           column_spacing=8, row_spacing=8,
+                           css_classes=["editor-filters"])
+        self._aspect_btns = {}
+        self._aspect_label = "Free"
+        for label, ratio in self._ASPECTS:
+            btn = Gtk.Button(label=label, css_classes=["editor-filter", "aspect-chip"])
+            btn.set_cursor(POINTER_CURSOR)
+            btn.connect("clicked", lambda _b, l=label, r=ratio: self._set_crop_aspect(l, r))
+            flow.insert(btn, -1)
+            self._aspect_btns[label] = btn
+        panel.append(flow)
+
+        panel.append(Gtk.Label(label="Straighten", xalign=0, margin_top=8,
+                               css_classes=["editor-eyebrow"]))
+        self._crop_straighten = AdjustScale(
+            adjustment=Gtk.Adjustment(lower=-15, upper=15, value=0, step_increment=1),
+            draw_value=False, hexpand=True, css_classes=["editor-scale"])
+        self._crop_straighten.connect(
+            "value-changed", lambda s: self._edit_set("straighten", s.get_value()))
+        panel.append(self._crop_straighten)
+
+        buttons = Gtk.Box(spacing=16, margin_top=16, homogeneous=True)
+        cancel = Gtk.Button(label="Cancel", css_classes=["editor-cancel"])
+        apply_btn = Gtk.Button(label="Apply", css_classes=["editor-save"])
+        cancel.set_cursor(POINTER_CURSOR)
+        apply_btn.set_cursor(POINTER_CURSOR)
+        cancel.connect("clicked", lambda *_: self._exit_crop(False))
+        apply_btn.connect("clicked", lambda *_: self._exit_crop(True))
+        buttons.append(cancel)
+        buttons.append(apply_btn)
+        panel.append(buttons)
+        self._highlight_aspect()
+
+    def _highlight_aspect(self):
+        for label, btn in getattr(self, "_aspect_btns", {}).items():
+            if label == self._aspect_label:
+                btn.add_css_class("selected")
+            else:
+                btn.remove_css_class("selected")
+
+    def _set_crop_aspect(self, label, ratio):
+        dw, dh = self._display_dims()
+        if ratio is None:
+            r_norm = None
+        elif ratio == "original":
+            r_norm = 1.0  # cw/ch = 1 → output aspect == image aspect
+        else:
+            pw, ph = ratio
+            r_norm = (pw / ph) * (dh / dw)
+        self._crop_overlay.set_aspect_ratio(r_norm)
+        self._aspect_label = label
+        self._highlight_aspect()
+
+    def _enter_crop(self):
+        self._crop_mode = True
+        self._editor_geometry_changed()
+        self._crop_backup = (list(self._crop_overlay._crop),
+                             self._edit_image.adjustments().get("straighten", 0.0),
+                             self._crop_overlay._aspect, self._aspect_label)
+        # Show the whole image while cropping so the frame can be placed against
+        # all of it; the applied crop is re-shown on exit.
+        self._edit_image.set_crop(None)
+        self._crop_overlay.set_active(True)
+        self.edit_tools.set_visible(False)
+        self.edit_crop_panel.set_visible(True)
+        self.edit_cancel_btn.set_visible(False)
+        self.edit_save_btn.set_visible(False)
+        self.edit_crop_btn.add_css_class("selected")
+        self._crop_straighten.set_value(
+            self._edit_image.adjustments().get("straighten", 0.0))
+        self._highlight_aspect()
+
+    def _exit_crop(self, save):
+        if save:
+            self._applied_crop = self._crop_overlay.get_crop()
+        elif getattr(self, "_crop_backup", None) is not None:
+            crop, straighten, aspect, label = self._crop_backup
+            self._crop_overlay.set_aspect_ratio(aspect, snap=False)
+            self._crop_overlay.set_crop(*crop)
+            self._edit_image.set_adjustment("straighten", straighten)
+            self._crop_straighten.set_value(straighten)
+            self._aspect_label = label
+            self._highlight_aspect()
+        # Show the applied crop live in the canvas.
+        self._edit_image.set_crop(self._applied_crop)
+        self._crop_backup = None
+        self._crop_mode = False
+        self._crop_overlay.set_active(False)
+        self.edit_tools.set_visible(True)
+        self.edit_crop_panel.set_visible(False)
+        self.edit_cancel_btn.set_visible(True)
+        self.edit_save_btn.set_visible(True)
+        self.edit_crop_btn.remove_css_class("selected")
 
     def _editor_visible(self):
         return self.edit_revealer.get_visible()
@@ -1247,14 +1475,17 @@ class EaselWindow(Adw.ApplicationWindow):
             self._toast("Couldn't open this image for editing")
             return
         self._edit_photo = row["path"]
+        self._edit_photo_id = row["id"]
         self._edit_texture = texture
         self._reset_editor()
         self._edit_image.set_texture(texture)
+        self._refresh_filter_thumbs()
         # Start from the photo's stored display rotation so the editor matches
         # what's shown everywhere else; saving bakes it into the copy.
         rotation = (row["rotation"] or 0) if "rotation" in row.keys() else 0
         if rotation:
             self._edit_image.set_adjustment("rotation", rotation)
+        self._editor_geometry_changed(reset_crop=True)
         self.edit_revealer.set_visible(True)
         self.edit_revealer.set_reveal_child(True)
 
@@ -1265,7 +1496,16 @@ class EaselWindow(Adw.ApplicationWindow):
         "mono":     (0, 0, -100, 0, 0, "none"),
         "sepia":    (0, 0, 0, 0, 0, "sepia"),
         "warm":     (0, 5, 8, 0, 45, "none"),
+        "cool":     (0, 5, -5, 0, -45, "none"),
+        "vivid":    (0, 20, 35, 0, 0, "none"),
+        "fade":     (8, -25, -20, 0, 5, "none"),
+        "noir":     (0, 45, -100, 0, 0, "none"),
     }
+    # Display order and labels for the filter chips.
+    _FILTER_ORDER = ("original", "mono", "sepia", "warm", "cool", "vivid", "fade", "noir")
+    _FILTER_LABELS = {"original": "Original", "mono": "B&W", "sepia": "Sepia",
+                      "warm": "Warm", "cool": "Cool", "vivid": "Vivid",
+                      "fade": "Fade", "noir": "Noir"}
 
     def _reset_editor(self):
         for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation,
@@ -1273,7 +1513,27 @@ class EaselWindow(Adw.ApplicationWindow):
             scale.set_value(0)
         if self._edit_image is not None:
             self._edit_image.reset()
+        self._applied_crop = None
+        self._edit_image.set_crop(None)
+        self._crop_overlay.set_aspect_ratio(None)
+        self._crop_overlay.reset()
+        self._aspect_label = "Free"
+        self._highlight_aspect()
+        if hasattr(self, "_crop_straighten"):
+            self._crop_straighten.set_value(0)
+        self._exit_crop_layout()
         self._select_filter("original")
+
+    def _exit_crop_layout(self):
+        """Return the editor to adjust mode's layout (used on reset/close)."""
+        self._crop_mode = False
+        self._crop_backup = None
+        self._crop_overlay.set_active(False)
+        self.edit_tools.set_visible(True)
+        self.edit_crop_panel.set_visible(False)
+        self.edit_cancel_btn.set_visible(True)
+        self.edit_save_btn.set_visible(True)
+        self.edit_crop_btn.remove_css_class("selected")
 
     def _apply_filter(self, name):
         b, c, s, e, t, tone = self._FILTERS[name]
@@ -1294,16 +1554,21 @@ class EaselWindow(Adw.ApplicationWindow):
     def _close_editor(self):
         self.edit_revealer.set_reveal_child(False)
         self.edit_revealer.set_visible(False)
+        self._exit_crop_layout()
         if self._edit_image is not None:
             self._edit_image.set_texture(None)
         self._edit_texture = None
         self._edit_photo = None
+        self._edit_photo_id = None
 
     def _save_edit(self):
         if self._edit_texture is None or self._edit_photo is None:
             return
         stem = Path(self._edit_photo).stem
-        dialog = Gtk.FileDialog(initial_name=f"{stem} (edited).jpg")
+        # Saved as PNG: it's the one image encoder that works in the GNOME
+        # runtime without gdk-pixbuf (whose JPEG saver fails — its glycin helper
+        # can't spawn in the sandbox). PNG is lossless, so no re-compression loss.
+        dialog = Gtk.FileDialog(initial_name=f"{stem} (edited).png")
         dialog.save(self, None, self._save_edit_finish)
 
     def _save_edit_finish(self, dialog, result):
@@ -1314,44 +1579,100 @@ class EaselWindow(Adw.ApplicationWindow):
         if not gfile or not gfile.get_path() or self._edit_texture is None:
             return
         dest = gfile.get_path()
+        # The output is PNG regardless of the typed name; keep the extension
+        # honest so nothing ends up as PNG bytes in a .jpg file.
+        if not dest.lower().endswith(".png"):
+            dest = os.path.splitext(dest)[0] + ".png"
         adj = self._edit_image.adjustments()
+        adj["crop"] = self._applied_crop
         self._toast("Saving edited copy…")
         # GSK rendering isn't thread-safe, so render on the main thread. Defer
         # via idle so the toast paints first; a single image is quick.
         GLib.idle_add(lambda: self._do_save(dest, adj))
 
     def _do_save(self, dest, adj):
-        self._after_save(self._render_and_save(dest, adj), dest)
-        return False
-
-    def _render_and_save(self, dest, adj):
+        # GSK rendering isn't thread-safe, so render on the main thread — but the
+        # expensive part (PNG encode + file write) runs on a worker so the UI
+        # doesn't freeze while a big photo is saved.
         try:
             out = render_adjusted_texture(self._edit_texture, adj)
-            if out is None:
-                return False
-            pixbuf = Gdk.pixbuf_get_from_texture(out)
-            if dest.lower().endswith(".png"):
-                pixbuf.savev(dest, "png", [], [])
-            else:
-                pixbuf.savev(dest, "jpeg", ["quality"], ["95"])
+        except Exception:
+            traceback.print_exc()
+            out = None
+        if out is None:
+            print("easel: render_adjusted_texture returned None (save)", file=sys.stderr)
+            self._after_save(False, dest)
+            return False
+        src = self._edit_photo
+
+        def work():
+            ok = self._encode_and_write(out, dest, src)
+            GLib.idle_add(lambda: self._after_save(ok, dest))
+
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def _encode_and_write(self, texture, dest, src):
+        # Runs off the main thread. `texture` is an immutable memory texture and
+        # `src` a path string, so nothing here touches live UI state.
+        try:
+            # Texture -> PNG bytes is the same path the thumbnail cache uses and
+            # is known to work here; gdk-pixbuf savers are not usable (glycin).
+            data = texture.save_to_png_bytes()
+            tmp = f"{dest}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data.get_data())
+            os.replace(tmp, dest)
+            self._copy_metadata_from(src, dest)
             return True
         except Exception:
+            traceback.print_exc()
             return False
+
+    @staticmethod
+    def _copy_metadata_from(src, dest):
+        """Carry the original photo's EXIF (capture date, camera, GPS…) over to
+        the saved PNG copy via an eXIf chunk, so edits don't strip the info the
+        library organises by. JPEG source only (that's where EXIF lives);
+        best-effort — a failure never affects the already-saved image."""
+        if not src or not src.lower().endswith((".jpg", ".jpeg")):
+            return
+        try:
+            seg = lib.read_exif_segment(src)
+            tiff = lib.exif_tiff_from_segment(seg) if seg else None
+            if tiff:
+                lib.write_png_with_exif(dest, tiff)
+        except Exception:
+            traceback.print_exc()
 
     def _after_save(self, ok, dest):
         if not ok:
             self._toast("Couldn't save the edited copy")
             return False
-        # If the copy landed inside a scanned folder, index it so it shows up.
-        for row in self.con.execute("SELECT path FROM folders").fetchall():
-            base = row["path"].rstrip("/") + "/"
-            if dest.startswith(base):
-                lib.scan_file(self.con, dest)
-                self._reload_all()
-                break
-        self._toast("Saved edited copy")
+        # Offer to show the edited file in place of the original in the library.
+        # Both files stay on disk; "Yes" just repoints this library entry (see
+        # _on_use_edited). A toast has one button, so Yes shows it and dismissing
+        # (swipe / ignore) is "No". Timeout 0 keeps the question until answered.
+        if self._edit_photo_id is not None:
+            toast = Adw.Toast.new("Image saved. Show it in Easel?")
+            toast.set_button_label("Yes")
+            toast.set_action_name("win.use-edited")
+            toast.set_action_target_value(GLib.Variant(
+                "s", json.dumps({"id": self._edit_photo_id, "path": dest})))
+            toast.set_timeout(0)
+        else:
+            toast = Adw.Toast.new("Image saved")
+        self.toast_overlay.add_toast(toast)
         self._close_editor()
         return False
+
+    def _on_use_edited(self, _action, param):
+        data = json.loads(param.get_string())
+        lib.set_photo_path(self.con, data["id"], data["path"])
+        self._reload_all()
+        if self._info_photo_id == data["id"]:
+            self._show_info(data["id"])
+        self._toast("Now showing the edited version")
 
     def _open_lightbox(self, photos, index):
         if not photos or not (0 <= index < len(photos)):
@@ -1429,7 +1750,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _update_lightbox_fav(self, photo):
         row = lib.get_photo(self.con, photo.id)
         fav = bool(row["favorite"]) if row else photo.favorite
-        self.lightbox_fav_btn.set_icon_name("easel-heart-symbolic")
+        self.lightbox_fav_btn.set_icon_name(self._heart_icon(fav))
         if fav:
             self.lightbox_fav_btn.add_css_class("faved")
         else:
@@ -1582,6 +1903,74 @@ class EaselWindow(Adw.ApplicationWindow):
         self._watch_debounce = 0
         self.settings.connect("changed::watch-folders", lambda *_: self._refresh_watchers())
         self._refresh_watchers()
+
+    # ---------- importing (files + drag-and-drop) ----------
+
+    def _setup_dnd(self):
+        """Accept photos (and folders) dropped anywhere on the window."""
+        drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        drop.connect("drop", self._on_drop)
+        self.add_controller(drop)
+
+    def _on_drop(self, _target, value, _x, _y):
+        try:
+            files = value.get_files()
+        except Exception:
+            return False
+        paths = [f.get_path() for f in files if f and f.get_path()]
+        if not paths:
+            return False
+        self._import_paths(paths)
+        return True
+
+    def _on_add_photos(self):
+        dialog = Gtk.FileDialog(title="Add Photos")
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("Images and videos")
+        for ext in sorted(lib.MEDIA_EXT):
+            file_filter.add_suffix(ext.lstrip("."))
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(file_filter)
+        dialog.set_filters(filters)
+        dialog.open_multiple(self, None, self._photos_chosen)
+
+    def _photos_chosen(self, dialog, result):
+        try:
+            files = dialog.open_multiple_finish(result)
+        except GLib.Error:
+            return
+        paths = [f.get_path() for f in files if f and f.get_path()]
+        self._import_paths(paths)
+
+    def _import_paths(self, paths):
+        """Index dropped/opened files: media files individually, folders as
+        watched photo folders. Runs off the main thread; scanning can be slow."""
+        if not paths:
+            return
+        self._toast("Importing…")
+
+        def work():
+            count = 0
+            for path in paths:
+                if os.path.isdir(path):
+                    lib.add_folder(self.con, path)
+                    lib.scan_folder(self.con, path)
+                    count += 1
+                elif os.path.splitext(path)[1].lower() in lib.MEDIA_EXT:
+                    lib.scan_file(self.con, path)
+                    count += 1
+            GLib.idle_add(self._reload_all)
+            GLib.idle_add(self._refresh_watchers)
+            GLib.idle_add(lambda: self._toast_imported(count))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _toast_imported(self, count):
+        if count:
+            self._toast(f"Imported {count} item{'s' if count != 1 else ''}")
+        else:
+            self._toast("Nothing to import")
+        return False
 
     def _refresh_watchers(self):
         for monitor in self._monitors:

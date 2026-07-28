@@ -9,6 +9,7 @@ import os
 import struct
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "easel"
@@ -229,6 +230,118 @@ def _exif_datetime(path):
     return None
 
 
+def read_exif_segment(path):
+    """Return the raw APP1 payload (starting b'Exif\\x00\\x00') of a JPEG, ready
+    to be spliced into another JPEG, or None if there's none to copy.
+
+    The photo's on-screen orientation is baked into Easel's edited pixels, so the
+    copied metadata's Orientation tag is neutralised to 1 — otherwise a viewer
+    would rotate the already-upright copy a second time. Everything else
+    (capture date, camera, GPS, …) is preserved verbatim for organisation."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(256 * 1024)
+    except OSError:
+        return None
+    if head[:2] != b"\xff\xd8":  # not a JPEG
+        return None
+    i = 2
+    while i + 4 <= len(head):
+        if head[i] != 0xFF:
+            break
+        marker = head[i + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", head[i + 2:i + 4])[0]
+        seg = head[i + 4:i + 2 + seg_len]
+        if marker == 0xE1 and seg[:6] == b"Exif\x00\x00":
+            # Only usable if we captured the whole segment.
+            if len(seg) != seg_len - 2:
+                return None
+            return _neutralize_orientation(bytearray(seg))
+        if marker == 0xDA:  # start of scan — no metadata past here
+            break
+        i += 2 + seg_len
+    return None
+
+
+def _neutralize_orientation(seg):
+    """Set the EXIF Orientation tag (IFD0 tag 0x0112) to 1 in-place, if present.
+    `seg` is the APP1 payload beginning with b'Exif\\x00\\x00'. Returns `seg`."""
+    exif = seg[6:]  # skip "Exif\0\0" -> TIFF header
+    if len(exif) < 8:
+        return seg
+    bo = "<" if exif[:2] == b"II" else ">" if exif[:2] == b"MM" else None
+    if bo is None:
+        return seg
+    try:
+        ifd0 = struct.unpack(bo + "I", exif[4:8])[0]
+        if ifd0 <= 0 or ifd0 + 2 > len(exif):
+            return seg
+        count = struct.unpack(bo + "H", exif[ifd0:ifd0 + 2])[0]
+        entry = ifd0 + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            tag = struct.unpack(bo + "H", exif[entry:entry + 2])[0]
+            if tag == 0x0112:  # Orientation (SHORT, inline value at entry+8)
+                one = struct.pack(bo + "H", 1)
+                # seg = "Exif\0\0" (6 bytes) + exif; value sits at exif[entry+8].
+                seg[6 + entry + 8:6 + entry + 10] = one
+                break
+            entry += 12
+    except struct.error:
+        pass
+    return seg
+
+
+def exif_tiff_from_segment(seg):
+    """Given an APP1 payload (b'Exif\\x00\\x00' + TIFF) as returned by
+    read_exif_segment, return just the TIFF/Exif stream — what a PNG eXIf chunk
+    stores (the JPEG-only 'Exif\\0\\0' prefix is dropped)."""
+    if not seg or bytes(seg[:6]) != b"Exif\x00\x00":
+        return None
+    return bytes(seg[6:])
+
+
+def _png_chunk(ctype, payload):
+    return (struct.pack(">I", len(payload)) + ctype + payload
+            + struct.pack(">I", zlib.crc32(ctype + payload) & 0xFFFFFFFF))
+
+
+def write_png_with_exif(png_path, exif_tiff):
+    """Insert an eXIf chunk (standardised PNG Exif container) into an existing
+    PNG, right after IHDR, so the edited copy keeps the original's capture
+    date/camera/GPS. No-op on any inconsistency so a failed copy never corrupts
+    the saved image."""
+    if not exif_tiff:
+        return
+    try:
+        with open(png_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return
+    sig = b"\x89PNG\r\n\x1a\n"
+    if data[:8] != sig or len(data) < 8 + 12:
+        return
+    ihdr_len = struct.unpack(">I", data[8:12])[0]
+    if data[12:16] != b"IHDR":
+        return
+    ihdr_end = 16 + ihdr_len + 4  # type(already counted) + data + CRC
+    chunk = _png_chunk(b"eXIf", bytes(exif_tiff))
+    tmp = f"{png_path}.exif.tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data[:ihdr_end] + chunk + data[ihdr_end:])
+        os.replace(tmp, png_path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 def _file_created(path):
     """Filesystem creation (birth) time if the platform exposes it, else None."""
     try:
@@ -420,6 +533,22 @@ def set_rotation(con, photo_id, degrees):
     isn't touched; the rotation is applied when the photo is drawn."""
     con.execute("UPDATE photos SET rotation=? WHERE id=?", (degrees % 360, photo_id))
     con.commit()
+
+
+def set_photo_path(con, photo_id, new_path):
+    """Point a library photo at a different file on disk (e.g. an edited copy),
+    keeping its favourite / album membership / capture date. Any other row
+    already using new_path is dropped first so the UNIQUE(path) holds. Rotation
+    resets to 0 — an edited copy has any display rotation baked into its pixels."""
+    try:
+        mtime = os.path.getmtime(new_path)
+    except OSError:
+        mtime = 0.0
+    con.execute("DELETE FROM photos WHERE path=? AND id<>?", (new_path, photo_id))
+    con.execute("UPDATE photos SET path=?, mtime=?, rotation=0 WHERE id=?",
+                (new_path, mtime, photo_id))
+    con.commit()
+    prune_orphans(con)
 
 
 def set_album_cover(con, album_id, path):

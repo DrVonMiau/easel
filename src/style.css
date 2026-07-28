@@ -641,13 +641,20 @@ window.dark .editor {
   background-color: alpha(@window_fg_color, 0.05);
 }
 
-/* Filter chips — filled secondary; the selected one gets a blue ring. */
+/* Crop tool while active (crop mode on): blue ring, like a pressed toggle. */
+.editor-tool-btn.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue;
+}
+
+window.dark .editor-tool-btn.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue_light;
+}
+
+/* Filter chips — each a live thumbnail of the photo under that filter plus its
+   name; the selected one gets a blue ring. */
 .editor-filter {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  min-height: 44px;
-  padding: 0 4px;
-  border-radius: 4px;
+  padding: 6px;
+  border-radius: 8px;
   color: @window_fg_color;
   background-color: alpha(@window_fg_color, 0.10);
   border: none;
@@ -664,6 +671,39 @@ window.dark .editor {
 
 window.dark .editor-filter.selected {
   box-shadow: inset 0 0 0 2px @easel_blue_light;
+}
+
+/* Crop aspect-ratio chips: text buttons reusing the filter-chip shell. */
+.aspect-chip {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  min-height: 34px;
+  padding: 4px 6px;
+}
+
+/* Filter chips live in a FlowBox; strip the wrapper child's own chrome so the
+   chip button is the only visible box. */
+.editor-filters > flowboxchild {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+}
+
+.editor-filters > flowboxchild:focus {
+  outline: none;
+}
+
+/* The preview swatch inside a filter chip: rounded, faint placeholder tint. */
+.filter-thumb {
+  border-radius: 6px;
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.filter-thumb-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: @window_fg_color;
 }
 
 /* Full-width slider — same look as the titlebar thumb slider. */
@@ -702,3 +742,6 @@ window.dark .editor-scale highlight,
 window.dark .editor-scale slider {
   background-color: @easel_blue_light;
 }
+
+/* The centre-origin dot marking each slider's neutral value is painted by
+   EaselAdjustScale in do_snapshot (on top of the fill), not via CSS marks. */

@@ -345,6 +345,17 @@ def _snapshot_adjusted(snapshot, texture, adj, out_w, out_h):
     snapshot.push_color_matrix(matrix, offset)
     snapshot.save()
     snapshot.translate(Graphene.Point().init(out_w / 2, out_h / 2))
+    # Straighten: a fine rotation of the whole displayed image (screen space,
+    # so it composes on top of the 90° steps and flips). Zoom up so the rotated
+    # image still fills its frame — no empty corners to crop around.
+    straighten = adj.get("straighten", 0.0)
+    if straighten:
+        rw0, rh0 = tw * scale, th * scale
+        a = math.radians(straighten)
+        ratio = max(rw0 / rh0, rh0 / rw0) if rh0 and rw0 else 1.0
+        zoom = abs(math.cos(a)) + ratio * abs(math.sin(a))
+        snapshot.scale(zoom, zoom)
+        snapshot.rotate(straighten)
     if rot:
         snapshot.rotate(rot)
     # Mirror horizontally / vertically about the image centre.
@@ -371,10 +382,20 @@ def render_adjusted_texture(texture, adj):
     node = snapshot.to_node()
     if node is None:
         return None
+    # A crop (normalised display-space x, y, w, h) selects the output sub-region:
+    # render only that rectangle of the composed node, so the texture comes out
+    # already cropped at full resolution.
+    crop = adj.get("crop")
+    if crop:
+        cx, cy, cw, ch = crop
+        vx, vy = cx * out_w, cy * out_h
+        vw, vh = max(1.0, cw * out_w), max(1.0, ch * out_h)
+    else:
+        vx, vy, vw, vh = 0.0, 0.0, out_w, out_h
     renderer = Gsk.CairoRenderer()
     try:
         renderer.realize(None)
-        return renderer.render_texture(node, Graphene.Rect().init(0, 0, out_w, out_h))
+        return renderer.render_texture(node, Graphene.Rect().init(vx, vy, vw, vh))
     except Exception:
         return None
     finally:
@@ -384,7 +405,8 @@ def render_adjusted_texture(texture, adj):
 
 DEFAULT_ADJUSTMENTS = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0,
                        "exposure": 1.0, "temperature": 0.0, "tone": "none",
-                       "flip_h": False, "flip_v": False, "rotation": 0}
+                       "flip_h": False, "flip_v": False, "rotation": 0,
+                       "straighten": 0.0}
 
 
 class AdjustableImage(Gtk.Widget):
@@ -398,15 +420,25 @@ class AdjustableImage(Gtk.Widget):
         super().__init__()
         self._texture = None
         self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self._crop = None   # applied crop (x, y, w, h normalised), shown live
         self.set_hexpand(True)
         self.set_vexpand(True)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
 
     def set_texture(self, texture):
         self._texture = texture
         self.queue_draw()
 
+    def set_crop(self, crop):
+        """Show only this normalised (x, y, w, h) region of the image, fit to the
+        widget — so an applied crop is visible while adjusting/filtering, not a
+        surprise at save time. None shows the whole image."""
+        self._crop = crop
+        self.queue_draw()
+
     def reset(self):
         self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self._crop = None
         self.queue_draw()
 
     def set_adjustment(self, name, value):
@@ -430,9 +462,370 @@ class AdjustableImage(Gtk.Widget):
 
     def do_snapshot(self, snapshot):
         width, height = self.get_width(), self.get_height()
+        texture = self._texture
+        if texture is None or width <= 0 or height <= 0:
+            return
+        if not self._crop:
+            _snapshot_adjusted(snapshot, texture, self._adj, width, height)
+            return
+        # Cropped preview: draw the whole adjusted image at the on-screen size
+        # its crop region needs to fill the widget, then offset so that region is
+        # centred; overflow is clipped away. Drawing at the final on-screen size
+        # (rather than native size + a scale()) keeps coordinates small and
+        # avoids the renderer culling an off-viewport draw. Matches the region
+        # render_adjusted_texture saves.
+        tw, th = texture.get_width(), texture.get_height()
+        rot = self._adj["rotation"] % 360
+        disp_w, disp_h = (th, tw) if rot in (90, 270) else (tw, th)
+        cx, cy, cw, ch = self._crop
+        cw = max(cw, 1e-3)
+        ch = max(ch, 1e-3)
+        # Scale so the crop region exactly fits the widget (contain).
+        s = min(width / (cw * disp_w), height / (ch * disp_h))
+        full_w, full_h = disp_w * s, disp_h * s      # whole image, on screen
+        crop_w_px, crop_h_px = cw * full_w, ch * full_h
+        crop_left = (width - crop_w_px) / 2.0
+        crop_top = (height - crop_h_px) / 2.0
+        off_x = crop_left - cx * full_w
+        off_y = crop_top - cy * full_h
+        # Clip to the crop rectangle itself, so the rest of the image (which
+        # bleeds into the letter/pillar-box margins) is hidden — otherwise the
+        # preview looks uncropped.
+        snapshot.push_clip(Graphene.Rect().init(crop_left, crop_top, crop_w_px, crop_h_px))
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(off_x, off_y))
+        _snapshot_adjusted(snapshot, texture, self._adj, full_w, full_h)
+        snapshot.restore()
+        snapshot.pop()
+
+
+class FilterThumb(Gtk.Widget):
+    """A small square preview of a texture with one set of colour adjustments
+    baked in — used for the editor's filter chips so each filter shows what it
+    does to the current photo rather than a bare label.
+
+    Only the colour matrix is applied (filters never rotate/flip), and the image
+    is cover-cropped into the square; overflow-hidden + CSS radius round it."""
+
+    __gtype_name__ = "EaselFilterThumb"
+
+    def __init__(self, size=54):
+        super().__init__()
+        self._size = size
+        self._texture = None
+        self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+
+    def do_measure(self, orientation, for_size):
+        return (self._size, self._size, -1, -1)
+
+    def set_source(self, texture, adj):
+        self._texture = texture
+        self._adj = dict(adj)
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot):
+        width, height = self.get_width(), self.get_height()
         if self._texture is None or width <= 0 or height <= 0:
             return
-        _snapshot_adjusted(snapshot, self._texture, self._adj, width, height)
+        tw, th = self._texture.get_width(), self._texture.get_height()
+        if tw <= 0 or th <= 0:
+            return
+        matrix, offset = _adjust_color_matrix(
+            self._adj["brightness"], self._adj["contrast"], self._adj["saturation"],
+            self._adj.get("exposure", 1.0), self._adj.get("temperature", 0.0),
+            self._adj.get("tone", "none"))
+        # content-fit: cover — scale to fill the square, centre-crop.
+        scale = max(width / tw, height / th)
+        dw, dh = tw * scale, th * scale
+        snapshot.push_color_matrix(matrix, offset)
+        snapshot.append_texture(
+            self._texture,
+            Graphene.Rect().init((width - dw) / 2, (height - dh) / 2, dw, dh))
+        snapshot.pop()
+
+
+class AdjustScale(Gtk.Scale):
+    """A GtkScale that paints a small dot at its centre (the neutral/original
+    value) so how far an adjustment has moved is obvious without a reset button.
+
+    The dot is drawn after the base scale, so it sits on top of the blue fill as
+    well as the grey track. It's suppressed while the handle rests at the centre
+    (the handle already marks the origin then, and a dot over it looks odd)."""
+
+    __gtype_name__ = "EaselAdjustScale"
+
+    _DOT_RADIUS = 2.0
+
+    def do_snapshot(self, snapshot):
+        Gtk.Scale.do_snapshot(self, snapshot)
+        adj = self.get_adjustment()
+        if adj is None:
+            return
+        lo, hi = adj.get_lower(), adj.get_upper()
+        span = hi - lo
+        if span <= 0:
+            return
+        mid = (lo + hi) / 2.0
+        # Hidden while the handle is (near) the centre — it covers the spot.
+        if abs(adj.get_value() - mid) / span < 0.03:
+            return
+        width, height = self.get_width(), self.get_height()
+        if width <= 0 or height <= 0:
+            return
+        r = self._DOT_RADIUS
+        rect = Graphene.Rect().init(width / 2.0 - r, height / 2.0 - r, 2 * r, 2 * r)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(rect, r)
+        white = Gdk.RGBA()
+        white.red = white.green = white.blue = white.alpha = 1.0
+        snapshot.push_rounded_clip(rounded)
+        snapshot.append_color(white, rect)
+        snapshot.pop()
+
+
+class CropOverlay(Gtk.Widget):
+    """Interactive crop rectangle drawn over the editor image.
+
+    Coordinates are stored normalised (0..1) in *display* space — the image as
+    shown, after rotation/flip — so the same rect maps straight onto the saved
+    render (render_adjusted_texture crops the display-space output by it). The
+    widget shares the image's allocation (it's an overlay child) and fits the
+    display aspect the same contain way the canvas does, so the frame lines up.
+
+    It only draws / takes input while active (crop mode). The crop is applied to
+    the exported image on save, not to the live canvas."""
+
+    __gtype_name__ = "EaselCropOverlay"
+
+    _HANDLE = 16.0   # px hit radius around a handle
+    _MIN = 0.06      # smallest normalised crop extent
+
+    def __init__(self):
+        super().__init__()
+        self._disp_w = 1.0
+        self._disp_h = 1.0
+        self._active = False
+        self._crop = [0.0, 0.0, 1.0, 1.0]  # x0, y0, x1, y1
+        self._aspect = None   # None = free; else locked normalised width/height
+        self._drag_handle = None
+        self._drag_start = None
+        self._pointer = Gdk.Cursor.new_from_name("pointer", None)
+        self.set_visible(False)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        self.add_controller(drag)
+        # Show the hand cursor only over a grabbable spot (handle or the crop
+        # interior), so an empty area doesn't imply you can draw a box there.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        self.add_controller(motion)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_display_size(self, w, h):
+        self._disp_w = max(1.0, float(w))
+        self._disp_h = max(1.0, float(h))
+        if self._aspect is not None:
+            self._snap_to_aspect()
+        self.queue_draw()
+
+    def set_crop(self, x0, y0, x1, y1):
+        self._crop = [x0, y0, x1, y1]
+        self.queue_draw()
+
+    def set_aspect_ratio(self, ratio, snap=True):
+        """Lock the crop to a normalised width/height ratio (None = free). When
+        locking, snap the current rect to a centred rect of that shape — unless
+        snap is False (used when restoring an exact rect on cancel)."""
+        self._aspect = ratio
+        if ratio is not None and snap:
+            self._snap_to_aspect()
+        self.queue_draw()
+
+    def _snap_to_aspect(self):
+        r = self._aspect
+        if not r or r <= 0:
+            return
+        cw, ch = 1.0, 1.0 / r
+        if ch > 1.0:
+            cw, ch = r, 1.0
+        x0 = (1.0 - cw) / 2.0
+        y0 = (1.0 - ch) / 2.0
+        self._crop = [x0, y0, x0 + cw, y0 + ch]
+
+    def set_active(self, active):
+        self._active = bool(active)
+        self.set_visible(self._active)
+        self.queue_draw()
+
+    def is_active(self):
+        return self._active
+
+    def reset(self):
+        self._crop = [0.0, 0.0, 1.0, 1.0]
+        self.queue_draw()
+
+    def get_crop(self):
+        """Normalised (x, y, w, h) in display space, or None when it's the whole
+        image (nothing to crop)."""
+        x0, y0, x1, y1 = self._crop
+        if x0 <= 0.002 and y0 <= 0.002 and x1 >= 0.998 and y1 >= 0.998:
+            return None
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def _image_rect(self):
+        """The pixel rect the image occupies in this widget (contain-fit,
+        centred) — matches how AdjustableImage places it."""
+        width, height = self.get_width(), self.get_height()
+        if width <= 0 or height <= 0:
+            return (0.0, 0.0, 0.0, 0.0)
+        scale = min(width / self._disp_w, height / self._disp_h)
+        iw, ih = self._disp_w * scale, self._disp_h * scale
+        return ((width - iw) / 2.0, (height - ih) / 2.0, iw, ih)
+
+    def _crop_px(self):
+        ix, iy, iw, ih = self._image_rect()
+        x0, y0, x1, y1 = self._crop
+        return (ix + x0 * iw, iy + y0 * ih, ix + x1 * iw, iy + y1 * ih)
+
+    @staticmethod
+    def _fill(snapshot, rgba, x, y, w, h):
+        if w > 0 and h > 0:
+            snapshot.append_color(rgba, Graphene.Rect().init(x, y, w, h))
+
+    def do_snapshot(self, snapshot):
+        if not self._active:
+            return
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0 or ih <= 0:
+            return
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        dim = Gdk.RGBA()
+        dim.red = dim.green = dim.blue = 0.0
+        dim.alpha = 0.5
+        # Dim the image outside the crop (four bands).
+        self._fill(snapshot, dim, ix, iy, iw, cy0 - iy)
+        self._fill(snapshot, dim, ix, cy1, iw, iy + ih - cy1)
+        self._fill(snapshot, dim, ix, cy0, cx0 - ix, cy1 - cy0)
+        self._fill(snapshot, dim, cx1, cy0, ix + iw - cx1, cy1 - cy0)
+        white = Gdk.RGBA()
+        white.red = white.green = white.blue = white.alpha = 1.0
+        # Rule-of-thirds guides.
+        guide = Gdk.RGBA()
+        guide.red = guide.green = guide.blue = 1.0
+        guide.alpha = 0.35
+        for t in (1 / 3.0, 2 / 3.0):
+            self._fill(snapshot, guide, cx0 + (cx1 - cx0) * t - 0.5, cy0, 1.0, cy1 - cy0)
+            self._fill(snapshot, guide, cx0, cy0 + (cy1 - cy0) * t - 0.5, cx1 - cx0, 1.0)
+        # Border.
+        t = 2.0
+        self._fill(snapshot, white, cx0, cy0, cx1 - cx0, t)
+        self._fill(snapshot, white, cx0, cy1 - t, cx1 - cx0, t)
+        self._fill(snapshot, white, cx0, cy0, t, cy1 - cy0)
+        self._fill(snapshot, white, cx1 - t, cy0, t, cy1 - cy0)
+        # Handles (corners + edge midpoints).
+        s = 4.0
+        for hx, hy in self._handle_points(cx0, cy0, cx1, cy1).values():
+            self._fill(snapshot, white, hx - s, hy - s, 2 * s, 2 * s)
+
+    def _handle_points(self, cx0, cy0, cx1, cy1):
+        pts = {"nw": (cx0, cy0), "ne": (cx1, cy0),
+               "sw": (cx0, cy1), "se": (cx1, cy1)}
+        # Edge handles only make sense when the aspect is free (they'd otherwise
+        # change one dimension independently and break the lock).
+        if self._aspect is None:
+            mx, my = (cx0 + cx1) / 2.0, (cy0 + cy1) / 2.0
+            pts.update({"n": (mx, cy0), "s": (mx, cy1),
+                        "w": (cx0, my), "e": (cx1, my)})
+        return pts
+
+    def _hit(self, x, y):
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0:
+            return False
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        for hx, hy in self._handle_points(cx0, cy0, cx1, cy1).values():
+            if abs(x - hx) <= self._HANDLE and abs(y - hy) <= self._HANDLE:
+                return True
+        return cx0 <= x <= cx1 and cy0 <= y <= cy1
+
+    def _on_motion(self, _controller, x, y):
+        if not self._active:
+            return
+        self.set_cursor(self._pointer if self._hit(x, y) else None)
+
+    def _on_drag_begin(self, _gesture, start_x, start_y):
+        self._drag_handle = None
+        self._drag_start = list(self._crop)
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0:
+            return
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        for name, (hx, hy) in self._handle_points(cx0, cy0, cx1, cy1).items():
+            if abs(start_x - hx) <= self._HANDLE and abs(start_y - hy) <= self._HANDLE:
+                self._drag_handle = name
+                return
+        if cx0 <= start_x <= cx1 and cy0 <= start_y <= cy1:
+            self._drag_handle = "move"
+
+    def _on_drag_update(self, _gesture, off_x, off_y):
+        if self._drag_handle is None:
+            return
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0 or ih <= 0:
+            return
+        dx, dy = off_x / iw, off_y / ih
+        x0, y0, x1, y1 = self._drag_start
+        m = self._MIN
+        h = self._drag_handle
+        if h == "move":
+            w, ht = x1 - x0, y1 - y0
+            nx0 = min(max(0.0, x0 + dx), 1.0 - w)
+            ny0 = min(max(0.0, y0 + dy), 1.0 - ht)
+            self._crop = [nx0, ny0, nx0 + w, ny0 + ht]
+        elif self._aspect is not None:
+            self._crop = self._resize_locked(h, dx, dy)
+        else:
+            if "w" in h:
+                x0 = min(max(0.0, x0 + dx), x1 - m)
+            if "e" in h:
+                x1 = max(min(1.0, x1 + dx), x0 + m)
+            if "n" in h:
+                y0 = min(max(0.0, y0 + dy), y1 - m)
+            if "s" in h:
+                y1 = max(min(1.0, y1 + dy), y0 + m)
+            self._crop = [x0, y0, x1, y1]
+        self.queue_draw()
+
+    def _resize_locked(self, handle, dx, dy):
+        """Resize a corner while keeping the locked aspect ratio, anchored at the
+        opposite corner. `dx, dy` are normalised drag offsets from drag start."""
+        r = self._aspect  # normalised width / height
+        x0, y0, x1, y1 = self._drag_start
+        # (anchor_x, anchor_y, x_grows_positive, y_grows_positive)
+        anchors = {"se": (x0, y0, 1, 1), "sw": (x1, y0, -1, 1),
+                   "ne": (x0, y1, 1, -1), "nw": (x1, y1, -1, -1)}
+        ax, ay, sgx, sgy = anchors[handle]
+        # Tentative moving corner, then size to the larger of the two deltas.
+        tx = (x1 if sgx > 0 else x0) + dx
+        ty = (y1 if sgy > 0 else y0) + dy
+        w = max(abs(tx - ax), abs(ty - ay) * r, self._MIN)
+        # Clamp so the box stays inside [0,1] on both axes.
+        max_w_x = (1.0 - ax) if sgx > 0 else ax
+        max_w_y = ((1.0 - ay) if sgy > 0 else ay) * r
+        w = min(w, max_w_x, max_w_y)
+        ht = w / r
+        nx0, nx1 = (ax, ax + w) if sgx > 0 else (ax - w, ax)
+        ny0, ny1 = (ay, ay + ht) if sgy > 0 else (ay - ht, ay)
+        return [nx0, ny0, nx1, ny1]
+
+    def _on_drag_end(self, _gesture, _off_x, _off_y):
+        self._drag_handle = None
+        self._drag_start = None
 
 
 class Swatch(Gtk.Widget):

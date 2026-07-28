@@ -39,6 +39,17 @@
 		<control>pointing</control>
 	</supports>
 	<releases>
+		<release version="0.2.0" date="2026-07-28">
+			<description>
+				<p>Editing and importing arrive.</p>
+				<ul>
+					<li>A photo editor: brightness, contrast, saturation, exposure and temperature, with a preset filter set (B&amp;W, Sepia, Warm, Cool, Vivid, Fade, Noir)</li>
+					<li>An interactive crop tool with aspect-ratio presets and a straighten slider</li>
+					<li>Rotate and flip, saved as a lossless copy that keeps the original's date and other metadata</li>
+					<li>Import individual photos, and drag-and-drop files or folders onto the window</li>
+				</ul>
+			</description>
+		</release>
 		<release version="0.1.0" date="2026-07-21">
 			<description>
 				<p>Initial release of Easel — the tool of each art, recast for photos. Browse your local pictures on a clean paper card, group them into albums, keep favourites, and open any photo in a full-window lightbox.</p>
