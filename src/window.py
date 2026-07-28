@@ -1307,8 +1307,10 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _editor_rotate(self, degrees):
         self._edit_image.rotate(degrees)
-        # Rotation changes the displayed aspect, so any in-progress crop no
-        # longer maps cleanly — reset it and refit the overlay.
+        # Rotation changes the displayed aspect, so any crop (overlay + the one
+        # applied to the canvas) no longer maps cleanly — clear it and refit.
+        self._applied_crop = None
+        self._edit_image.set_crop(None)
         self._editor_geometry_changed(reset_crop=True)
 
     def _display_dims(self):
