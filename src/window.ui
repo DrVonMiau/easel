@@ -6,6 +6,10 @@
   <menu id="primary_menu">
     <section>
       <item>
+        <attribute name="label" translatable="yes">Add Photos…</attribute>
+        <attribute name="action">win.add-photos</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Add Photo Folder…</attribute>
         <attribute name="action">win.add-folder</attribute>
       </item>
@@ -168,32 +172,6 @@
                         <child>
                           <object class="GtkButton" id="tab_years">
                             <property name="label" translatable="yes">Years</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label">|</property>
-                            <style>
-                              <class name="tab-sep"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_people">
-                            <property name="label" translatable="yes">People</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_maps">
-                            <property name="label" translatable="yes">Maps</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -489,32 +467,6 @@
                                 </style>
                               </object>
                             </property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">maps</property>
-                        <property name="child">
-                          <object class="AdwStatusPage">
-                            <property name="icon-name">map-symbolic</property>
-                            <property name="title" translatable="yes">Maps</property>
-                            <property name="description" translatable="yes">Photos placed on a map by their location. Coming soon — this reads GPS from each photo's metadata.</property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">people</property>
-                        <property name="child">
-                          <object class="AdwStatusPage">
-                            <property name="icon-name">system-users-symbolic</property>
-                            <property name="title" translatable="yes">People</property>
-                            <property name="description" translatable="yes">Photos grouped by the people in them. Coming soon — this needs on-device face detection.</property>
                           </object>
                         </property>
                       </object>
@@ -923,12 +875,17 @@
                       <object class="GtkScrolledWindow">
                         <property name="hscrollbar-policy">never</property>
                         <property name="width-request">300</property>
+                        <property name="hexpand">false</property>
+                        <property name="overlay-scrolling">true</property>
+                        <property name="propagate-natural-width">false</property>
                         <style>
                           <class name="om-scroll"/>
                         </style>
                         <property name="child">
                           <object class="GtkBox" id="edit_tools_wrap">
                             <property name="orientation">vertical</property>
+                            <property name="width-request">300</property>
+                            <property name="hexpand">false</property>
                           <child>
                           <object class="GtkBox" id="edit_tools">
                             <property name="orientation">vertical</property>

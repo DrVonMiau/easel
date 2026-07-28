@@ -52,7 +52,8 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites", "maps", "people")
+# (Maps + People are deferred until GPS/face-detection land.)
+VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -128,8 +129,6 @@ class EaselWindow(Adw.ApplicationWindow):
     tab_years = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
     tab_favourites = Gtk.Template.Child()
-    tab_maps = Gtk.Template.Child()
-    tab_people = Gtk.Template.Child()
     search_entry = Gtk.Template.Child()
 
     paper_stack = Gtk.Template.Child()
@@ -218,6 +217,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_photo = None
         self._edit_photo_id = None
         self._crop_backup = None
+        self._applied_crop = None
 
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
@@ -228,8 +228,6 @@ class EaselWindow(Adw.ApplicationWindow):
             "years": self.tab_years,
             "albums": self.tab_albums,
             "favourites": self.tab_favourites,
-            "maps": self.tab_maps,
-            "people": self.tab_people,
         }
 
         self._setup_actions()
@@ -252,6 +250,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._restore_state()
         self._reload_all()
         self._setup_watching()
+        self._setup_dnd()
         self._setup_titlebar_sides()
         self._apply_pointer_cursors()
 
@@ -414,6 +413,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _setup_actions(self):
         for name, handler in (
             ("add-folder", lambda *_a: self._on_add_folder()),
+            ("add-photos", lambda *_a: self._on_add_photos()),
             ("rescan", lambda *_a: self._on_rescan()),
             ("new-album", lambda *_a: self._on_new_album()),
             ("preferences", lambda *_a: self._on_preferences()),
@@ -544,33 +544,31 @@ class EaselWindow(Adw.ApplicationWindow):
         play.set_visible(False)
         overlay.add_overlay(play)
 
-        menu_btn = Gtk.Button(icon_name="easel-more-symbolic", halign=Gtk.Align.END,
-                              valign=Gtk.Align.START, margin_top=12, margin_end=12,
-                              tooltip_text="More", css_classes=["card-menu-btn"])
-        menu_btn.set_visible(False)
-        menu_btn.set_cursor(POINTER_CURSOR)
-        overlay.add_overlay(menu_btn)
+        # Top-right control opens the photo full screen — clicking a photo
+        # already surfaces its actions in the info panel, so a quick "view big"
+        # button is more useful here than the old ⋯ menu (right-click still has
+        # the full menu).
+        fs_btn = Gtk.Button(icon_name="easel-maximize-symbolic", halign=Gtk.Align.END,
+                            valign=Gtk.Align.START, margin_top=12, margin_end=12,
+                            tooltip_text="View full screen", css_classes=["card-menu-btn"])
+        fs_btn.set_visible(False)
+        fs_btn.set_cursor(POINTER_CURSOR)
+        fs_btn.connect("clicked", lambda _b: self._open_photo_by_id(box._photo.id)
+                       if box._photo else None)
+        overlay.add_overlay(fs_btn)
 
         box.append(overlay)
-        box.swatch, box.fav, box.menu_btn = swatch, fav, menu_btn
+        box.swatch, box.fav, box.fs_btn = swatch, fav, fs_btn
         box.play = play
         box._photo = None
         box._source = "photos"
-        box._menu_open = False
 
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", lambda *_a: (box.fav.set_visible(True),
-                                             box.menu_btn.set_visible(True)))
+                                             box.fs_btn.set_visible(True)))
         motion.connect("leave", lambda *_a: self._tile_unhover(box))
         box.add_controller(motion)
         box._motion = motion
-
-        def on_menu_clicked(btn):
-            box._menu_open = True
-            popover = self._show_item_menu(box, btn, btn.get_width() / 2, btn.get_height())
-            popover.connect("closed", lambda _p: self._tile_menu_closed(box))
-
-        menu_btn.connect("clicked", on_menu_clicked)
 
         left = Gtk.GestureClick(button=1)
         left.connect("pressed", lambda _g, n, x, y: self._tile_pressed(n, box, x, y))
@@ -594,17 +592,10 @@ class EaselWindow(Adw.ApplicationWindow):
         return box._photo is not None and box._photo.favorite
 
     def _tile_unhover(self, box):
-        # The heart stays visible for favourited photos; the menu button hides
-        # unless its popover is open.
+        # The heart stays visible for favourited photos; the fullscreen button
+        # only shows on hover.
         box.fav.set_visible(self._tile_faved(box))
-        if not box._menu_open:
-            box.menu_btn.set_visible(False)
-
-    def _tile_menu_closed(self, box):
-        box._menu_open = False
-        if not box._motion.get_property("contains-pointer"):
-            box.menu_btn.set_visible(False)
-            box.fav.set_visible(self._tile_faved(box))
+        box.fs_btn.set_visible(False)
 
     def _bind_tile(self, tile, photo, source_name):
         tile._photo = photo
@@ -637,13 +628,13 @@ class EaselWindow(Adw.ApplicationWindow):
         photo = tile._photo
         if photo is None:
             return
-        # A press that lands on an overlay control (the heart or the ⋯ menu)
-        # belongs to that button alone — it must not also select the photo or
-        # open the info panel.
+        # A press that lands on an overlay control (the heart or fullscreen
+        # button) belongs to that button alone — it must not also select the
+        # photo or open the info panel.
         if x is not None:
             picked = tile.pick(x, y, Gtk.PickFlags.DEFAULT)
             while picked is not None and picked is not tile:
-                if picked is tile.fav or picked is tile.menu_btn:
+                if picked is tile.fav or picked is tile.fs_btn:
                     return
                 picked = picked.get_parent()
         if n_press >= 2:
@@ -1408,6 +1399,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self._crop_backup = (list(self._crop_overlay._crop),
                              self._edit_image.adjustments().get("straighten", 0.0),
                              self._crop_overlay._aspect, self._aspect_label)
+        # Show the whole image while cropping so the frame can be placed against
+        # all of it; the applied crop is re-shown on exit.
+        self._edit_image.set_crop(None)
         self._crop_overlay.set_active(True)
         self.edit_tools.set_visible(False)
         self.edit_crop_panel.set_visible(True)
@@ -1419,7 +1413,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self._highlight_aspect()
 
     def _exit_crop(self, save):
-        if not save and getattr(self, "_crop_backup", None) is not None:
+        if save:
+            self._applied_crop = self._crop_overlay.get_crop()
+        elif getattr(self, "_crop_backup", None) is not None:
             crop, straighten, aspect, label = self._crop_backup
             self._crop_overlay.set_aspect_ratio(aspect, snap=False)
             self._crop_overlay.set_crop(*crop)
@@ -1427,6 +1423,8 @@ class EaselWindow(Adw.ApplicationWindow):
             self._crop_straighten.set_value(straighten)
             self._aspect_label = label
             self._highlight_aspect()
+        # Show the applied crop live in the canvas.
+        self._edit_image.set_crop(self._applied_crop)
         self._crop_backup = None
         self._crop_mode = False
         self._crop_overlay.set_active(False)
@@ -1489,6 +1487,8 @@ class EaselWindow(Adw.ApplicationWindow):
             scale.set_value(0)
         if self._edit_image is not None:
             self._edit_image.reset()
+        self._applied_crop = None
+        self._edit_image.set_crop(None)
         self._crop_overlay.set_aspect_ratio(None)
         self._crop_overlay.reset()
         self._aspect_label = "Free"
@@ -1558,7 +1558,7 @@ class EaselWindow(Adw.ApplicationWindow):
         if not dest.lower().endswith(".png"):
             dest = os.path.splitext(dest)[0] + ".png"
         adj = self._edit_image.adjustments()
-        adj["crop"] = self._crop_overlay.get_crop()
+        adj["crop"] = self._applied_crop
         self._toast("Saving edited copy…")
         # GSK rendering isn't thread-safe, so render on the main thread. Defer
         # via idle so the toast paints first; a single image is quick.
@@ -1624,15 +1624,18 @@ class EaselWindow(Adw.ApplicationWindow):
             self._toast("Couldn't save the edited copy")
             return False
         # Offer to show the edited file in place of the original in the library.
-        # Both files stay on disk; "Show edited" just repoints this library entry
-        # (see _on_use_edited). The toast waits (timeout 0) for the decision.
-        toast = Adw.Toast.new("Saved edited copy")
+        # Both files stay on disk; "Yes" just repoints this library entry (see
+        # _on_use_edited). A toast has one button, so Yes shows it and dismissing
+        # (swipe / ignore) is "No". Timeout 0 keeps the question until answered.
         if self._edit_photo_id is not None:
-            toast.set_button_label("Show edited")
+            toast = Adw.Toast.new("Image saved. Show it in Easel?")
+            toast.set_button_label("Yes")
             toast.set_action_name("win.use-edited")
             toast.set_action_target_value(GLib.Variant(
                 "s", json.dumps({"id": self._edit_photo_id, "path": dest})))
             toast.set_timeout(0)
+        else:
+            toast = Adw.Toast.new("Image saved")
         self.toast_overlay.add_toast(toast)
         self._close_editor()
         return False
@@ -1874,6 +1877,74 @@ class EaselWindow(Adw.ApplicationWindow):
         self._watch_debounce = 0
         self.settings.connect("changed::watch-folders", lambda *_: self._refresh_watchers())
         self._refresh_watchers()
+
+    # ---------- importing (files + drag-and-drop) ----------
+
+    def _setup_dnd(self):
+        """Accept photos (and folders) dropped anywhere on the window."""
+        drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        drop.connect("drop", self._on_drop)
+        self.add_controller(drop)
+
+    def _on_drop(self, _target, value, _x, _y):
+        try:
+            files = value.get_files()
+        except Exception:
+            return False
+        paths = [f.get_path() for f in files if f and f.get_path()]
+        if not paths:
+            return False
+        self._import_paths(paths)
+        return True
+
+    def _on_add_photos(self):
+        dialog = Gtk.FileDialog(title="Add Photos")
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("Images and videos")
+        for ext in sorted(lib.MEDIA_EXT):
+            file_filter.add_suffix(ext.lstrip("."))
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(file_filter)
+        dialog.set_filters(filters)
+        dialog.open_multiple(self, None, self._photos_chosen)
+
+    def _photos_chosen(self, dialog, result):
+        try:
+            files = dialog.open_multiple_finish(result)
+        except GLib.Error:
+            return
+        paths = [f.get_path() for f in files if f and f.get_path()]
+        self._import_paths(paths)
+
+    def _import_paths(self, paths):
+        """Index dropped/opened files: media files individually, folders as
+        watched photo folders. Runs off the main thread; scanning can be slow."""
+        if not paths:
+            return
+        self._toast("Importing…")
+
+        def work():
+            count = 0
+            for path in paths:
+                if os.path.isdir(path):
+                    lib.add_folder(self.con, path)
+                    lib.scan_folder(self.con, path)
+                    count += 1
+                elif os.path.splitext(path)[1].lower() in lib.MEDIA_EXT:
+                    lib.scan_file(self.con, path)
+                    count += 1
+            GLib.idle_add(self._reload_all)
+            GLib.idle_add(self._refresh_watchers)
+            GLib.idle_add(lambda: self._toast_imported(count))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _toast_imported(self, count):
+        if count:
+            self._toast(f"Imported {count} item{'s' if count != 1 else ''}")
+        else:
+            self._toast("Nothing to import")
+        return False
 
     def _refresh_watchers(self):
         for monitor in self._monitors:

@@ -420,6 +420,7 @@ class AdjustableImage(Gtk.Widget):
         super().__init__()
         self._texture = None
         self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self._crop = None   # applied crop (x, y, w, h normalised), shown live
         self.set_hexpand(True)
         self.set_vexpand(True)
 
@@ -427,8 +428,16 @@ class AdjustableImage(Gtk.Widget):
         self._texture = texture
         self.queue_draw()
 
+    def set_crop(self, crop):
+        """Show only this normalised (x, y, w, h) region of the image, fit to the
+        widget — so an applied crop is visible while adjusting/filtering, not a
+        surprise at save time. None shows the whole image."""
+        self._crop = crop
+        self.queue_draw()
+
     def reset(self):
         self._adj = dict(DEFAULT_ADJUSTMENTS)
+        self._crop = None
         self.queue_draw()
 
     def set_adjustment(self, name, value):
@@ -452,9 +461,31 @@ class AdjustableImage(Gtk.Widget):
 
     def do_snapshot(self, snapshot):
         width, height = self.get_width(), self.get_height()
-        if self._texture is None or width <= 0 or height <= 0:
+        texture = self._texture
+        if texture is None or width <= 0 or height <= 0:
             return
-        _snapshot_adjusted(snapshot, self._texture, self._adj, width, height)
+        if not self._crop:
+            _snapshot_adjusted(snapshot, texture, self._adj, width, height)
+            return
+        # Cropped preview: render the full displayed image at its native size in
+        # a coordinate space transformed so the crop rect fills the widget,
+        # clipped to the widget. Mirrors what render_adjusted_texture saves.
+        tw, th = texture.get_width(), texture.get_height()
+        rot = self._adj["rotation"] % 360
+        disp_w, disp_h = (th, tw) if rot in (90, 270) else (tw, th)
+        cx, cy, cw, ch = self._crop
+        cxpx, cypx = cx * disp_w, cy * disp_h
+        cwpx, chpx = max(1.0, cw * disp_w), max(1.0, ch * disp_h)
+        s = min(width / cwpx, height / chpx)
+        draw_w, draw_h = cwpx * s, chpx * s
+        snapshot.push_clip(Graphene.Rect().init(0, 0, width, height))
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init((width - draw_w) / 2, (height - draw_h) / 2))
+        snapshot.scale(s, s)
+        snapshot.translate(Graphene.Point().init(-cxpx, -cypx))
+        _snapshot_adjusted(snapshot, texture, self._adj, disp_w, disp_h)
+        snapshot.restore()
+        snapshot.pop()
 
 
 class FilterThumb(Gtk.Widget):
