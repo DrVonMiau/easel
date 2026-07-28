@@ -345,6 +345,17 @@ def _snapshot_adjusted(snapshot, texture, adj, out_w, out_h):
     snapshot.push_color_matrix(matrix, offset)
     snapshot.save()
     snapshot.translate(Graphene.Point().init(out_w / 2, out_h / 2))
+    # Straighten: a fine rotation of the whole displayed image (screen space,
+    # so it composes on top of the 90° steps and flips). Zoom up so the rotated
+    # image still fills its frame — no empty corners to crop around.
+    straighten = adj.get("straighten", 0.0)
+    if straighten:
+        rw0, rh0 = tw * scale, th * scale
+        a = math.radians(straighten)
+        ratio = max(rw0 / rh0, rh0 / rw0) if rh0 and rw0 else 1.0
+        zoom = abs(math.cos(a)) + ratio * abs(math.sin(a))
+        snapshot.scale(zoom, zoom)
+        snapshot.rotate(straighten)
     if rot:
         snapshot.rotate(rot)
     # Mirror horizontally / vertically about the image centre.
@@ -394,7 +405,8 @@ def render_adjusted_texture(texture, adj):
 
 DEFAULT_ADJUSTMENTS = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0,
                        "exposure": 1.0, "temperature": 0.0, "tone": "none",
-                       "flip_h": False, "flip_v": False, "rotation": 0}
+                       "flip_h": False, "flip_v": False, "rotation": 0,
+                       "straighten": 0.0}
 
 
 class AdjustableImage(Gtk.Widget):
@@ -553,15 +565,21 @@ class CropOverlay(Gtk.Widget):
         self._disp_h = 1.0
         self._active = False
         self._crop = [0.0, 0.0, 1.0, 1.0]  # x0, y0, x1, y1
+        self._aspect = None   # None = free; else locked normalised width/height
         self._drag_handle = None
         self._drag_start = None
+        self._pointer = Gdk.Cursor.new_from_name("pointer", None)
         self.set_visible(False)
         drag = Gtk.GestureDrag()
         drag.connect("drag-begin", self._on_drag_begin)
         drag.connect("drag-update", self._on_drag_update)
         drag.connect("drag-end", self._on_drag_end)
         self.add_controller(drag)
-        self.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        # Show the hand cursor only over a grabbable spot (handle or the crop
+        # interior), so an empty area doesn't imply you can draw a box there.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        self.add_controller(motion)
 
     def do_measure(self, orientation, for_size):
         return (0, 0, -1, -1)
@@ -569,7 +587,33 @@ class CropOverlay(Gtk.Widget):
     def set_display_size(self, w, h):
         self._disp_w = max(1.0, float(w))
         self._disp_h = max(1.0, float(h))
+        if self._aspect is not None:
+            self._snap_to_aspect()
         self.queue_draw()
+
+    def set_crop(self, x0, y0, x1, y1):
+        self._crop = [x0, y0, x1, y1]
+        self.queue_draw()
+
+    def set_aspect_ratio(self, ratio, snap=True):
+        """Lock the crop to a normalised width/height ratio (None = free). When
+        locking, snap the current rect to a centred rect of that shape — unless
+        snap is False (used when restoring an exact rect on cancel)."""
+        self._aspect = ratio
+        if ratio is not None and snap:
+            self._snap_to_aspect()
+        self.queue_draw()
+
+    def _snap_to_aspect(self):
+        r = self._aspect
+        if not r or r <= 0:
+            return
+        cw, ch = 1.0, 1.0 / r
+        if ch > 1.0:
+            cw, ch = r, 1.0
+        x0 = (1.0 - cw) / 2.0
+        y0 = (1.0 - ch) / 2.0
+        self._crop = [x0, y0, x0 + cw, y0 + ch]
 
     def set_active(self, active):
         self._active = bool(active)
@@ -646,13 +690,31 @@ class CropOverlay(Gtk.Widget):
         for hx, hy in self._handle_points(cx0, cy0, cx1, cy1).values():
             self._fill(snapshot, white, hx - s, hy - s, 2 * s, 2 * s)
 
-    @staticmethod
-    def _handle_points(cx0, cy0, cx1, cy1):
-        mx, my = (cx0 + cx1) / 2.0, (cy0 + cy1) / 2.0
-        return {
-            "nw": (cx0, cy0), "ne": (cx1, cy0), "sw": (cx0, cy1), "se": (cx1, cy1),
-            "n": (mx, cy0), "s": (mx, cy1), "w": (cx0, my), "e": (cx1, my),
-        }
+    def _handle_points(self, cx0, cy0, cx1, cy1):
+        pts = {"nw": (cx0, cy0), "ne": (cx1, cy0),
+               "sw": (cx0, cy1), "se": (cx1, cy1)}
+        # Edge handles only make sense when the aspect is free (they'd otherwise
+        # change one dimension independently and break the lock).
+        if self._aspect is None:
+            mx, my = (cx0 + cx1) / 2.0, (cy0 + cy1) / 2.0
+            pts.update({"n": (mx, cy0), "s": (mx, cy1),
+                        "w": (cx0, my), "e": (cx1, my)})
+        return pts
+
+    def _hit(self, x, y):
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0:
+            return False
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        for hx, hy in self._handle_points(cx0, cy0, cx1, cy1).values():
+            if abs(x - hx) <= self._HANDLE and abs(y - hy) <= self._HANDLE:
+                return True
+        return cx0 <= x <= cx1 and cy0 <= y <= cy1
+
+    def _on_motion(self, _controller, x, y):
+        if not self._active:
+            return
+        self.set_cursor(self._pointer if self._hit(x, y) else None)
 
     def _on_drag_begin(self, _gesture, start_x, start_y):
         self._drag_handle = None
@@ -683,6 +745,8 @@ class CropOverlay(Gtk.Widget):
             nx0 = min(max(0.0, x0 + dx), 1.0 - w)
             ny0 = min(max(0.0, y0 + dy), 1.0 - ht)
             self._crop = [nx0, ny0, nx0 + w, ny0 + ht]
+        elif self._aspect is not None:
+            self._crop = self._resize_locked(h, dx, dy)
         else:
             if "w" in h:
                 x0 = min(max(0.0, x0 + dx), x1 - m)
@@ -694,6 +758,28 @@ class CropOverlay(Gtk.Widget):
                 y1 = max(min(1.0, y1 + dy), y0 + m)
             self._crop = [x0, y0, x1, y1]
         self.queue_draw()
+
+    def _resize_locked(self, handle, dx, dy):
+        """Resize a corner while keeping the locked aspect ratio, anchored at the
+        opposite corner. `dx, dy` are normalised drag offsets from drag start."""
+        r = self._aspect  # normalised width / height
+        x0, y0, x1, y1 = self._drag_start
+        # (anchor_x, anchor_y, x_grows_positive, y_grows_positive)
+        anchors = {"se": (x0, y0, 1, 1), "sw": (x1, y0, -1, 1),
+                   "ne": (x0, y1, 1, -1), "nw": (x1, y1, -1, -1)}
+        ax, ay, sgx, sgy = anchors[handle]
+        # Tentative moving corner, then size to the larger of the two deltas.
+        tx = (x1 if sgx > 0 else x0) + dx
+        ty = (y1 if sgy > 0 else y0) + dy
+        w = max(abs(tx - ax), abs(ty - ay) * r, self._MIN)
+        # Clamp so the box stays inside [0,1] on both axes.
+        max_w_x = (1.0 - ax) if sgx > 0 else ax
+        max_w_y = ((1.0 - ay) if sgy > 0 else ay) * r
+        w = min(w, max_w_x, max_w_y)
+        ht = w / r
+        nx0, nx1 = (ax, ax + w) if sgx > 0 else (ax - w, ax)
+        ny0, ny1 = (ay, ay + ht) if sgy > 0 else (ay - ht, ay)
+        return [nx0, ny0, nx1, ny1]
 
     def _on_drag_end(self, _gesture, _off_x, _off_y):
         self._drag_handle = None

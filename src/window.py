@@ -182,6 +182,8 @@ class EaselWindow(Adw.ApplicationWindow):
     edit_flip_h_btn = Gtk.Template.Child()
     edit_flip_v_btn = Gtk.Template.Child()
     edit_filter_flow = Gtk.Template.Child()
+    edit_tools = Gtk.Template.Child()
+    edit_crop_panel = Gtk.Template.Child()
 
     PANEL_WIDTH = 300
 
@@ -215,6 +217,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_texture = None
         self._edit_photo = None
         self._edit_photo_id = None
+        self._crop_backup = None
 
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
@@ -1268,7 +1271,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self.edit_flip_v_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("v"))
         self.edit_crop_btn.set_sensitive(True)
         self.edit_crop_btn.set_tooltip_text("Crop")
-        self.edit_crop_btn.connect("clicked", lambda *_: self._toggle_crop())
+        self.edit_crop_btn.connect("clicked", lambda *_: self._enter_crop())
+        self._build_crop_panel()
         # Each filter chip carries a live thumbnail of the current photo under
         # that filter (set when the editor opens) plus its name below; built into
         # a wrapping flow so the set can grow without overflowing the panel.
@@ -1316,26 +1320,121 @@ class EaselWindow(Adw.ApplicationWindow):
         # longer maps cleanly — reset it and refit the overlay.
         self._editor_geometry_changed(reset_crop=True)
 
+    def _display_dims(self):
+        """The displayed image's pixel dimensions (post 90° rotation)."""
+        tex = self._edit_texture
+        if tex is None:
+            return (1.0, 1.0)
+        tw, th = tex.get_width(), tex.get_height()
+        rot = self._edit_image.adjustments()["rotation"] % 360
+        return (th, tw) if rot in (90, 270) else (tw, th)
+
     def _editor_geometry_changed(self, reset_crop=False):
         """Keep the crop overlay's fit in step with the displayed image (its
         aspect flips on 90/270 rotation)."""
-        tex = self._edit_texture
-        if tex is None or self._crop_overlay is None:
+        if self._crop_overlay is None:
             return
-        tw, th = tex.get_width(), tex.get_height()
-        rot = self._edit_image.adjustments()["rotation"] % 360
-        disp = (th, tw) if rot in (90, 270) else (tw, th)
-        self._crop_overlay.set_display_size(*disp)
+        self._crop_overlay.set_display_size(*self._display_dims())
         if reset_crop:
             self._crop_overlay.reset()
 
-    def _toggle_crop(self):
-        self._crop_mode = not self._crop_mode
-        self._crop_overlay.set_active(self._crop_mode)
-        if self._crop_mode:
-            self.edit_crop_btn.add_css_class("selected")
+    # Common output aspect ratios (width:height); None = free-form.
+    _ASPECTS = (("Free", None), ("Original", "original"), ("1:1", (1, 1)),
+                ("4:3", (4, 3)), ("3:2", (3, 2)), ("16:9", (16, 9)),
+                ("4:5", (4, 5)), ("9:16", (9, 16)))
+
+    def _build_crop_panel(self):
+        panel = self.edit_crop_panel
+        panel.append(Gtk.Label(label="Aspect Ratio", xalign=0,
+                               css_classes=["editor-eyebrow"]))
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+                           min_children_per_line=4, max_children_per_line=4,
+                           column_spacing=8, row_spacing=8,
+                           css_classes=["editor-filters"])
+        self._aspect_btns = {}
+        self._aspect_label = "Free"
+        for label, ratio in self._ASPECTS:
+            btn = Gtk.Button(label=label, css_classes=["editor-filter", "aspect-chip"])
+            btn.set_cursor(POINTER_CURSOR)
+            btn.connect("clicked", lambda _b, l=label, r=ratio: self._set_crop_aspect(l, r))
+            flow.insert(btn, -1)
+            self._aspect_btns[label] = btn
+        panel.append(flow)
+
+        panel.append(Gtk.Label(label="Straighten", xalign=0, margin_top=8,
+                               css_classes=["editor-eyebrow"]))
+        self._crop_straighten = AdjustScale(
+            adjustment=Gtk.Adjustment(lower=-15, upper=15, value=0, step_increment=1),
+            draw_value=False, hexpand=True, css_classes=["editor-scale"])
+        self._crop_straighten.connect(
+            "value-changed", lambda s: self._edit_set("straighten", s.get_value()))
+        panel.append(self._crop_straighten)
+
+        buttons = Gtk.Box(spacing=16, margin_top=16, homogeneous=True)
+        cancel = Gtk.Button(label="Cancel", css_classes=["editor-cancel"])
+        apply_btn = Gtk.Button(label="Apply", css_classes=["editor-save"])
+        cancel.set_cursor(POINTER_CURSOR)
+        apply_btn.set_cursor(POINTER_CURSOR)
+        cancel.connect("clicked", lambda *_: self._exit_crop(False))
+        apply_btn.connect("clicked", lambda *_: self._exit_crop(True))
+        buttons.append(cancel)
+        buttons.append(apply_btn)
+        panel.append(buttons)
+        self._highlight_aspect()
+
+    def _highlight_aspect(self):
+        for label, btn in getattr(self, "_aspect_btns", {}).items():
+            if label == self._aspect_label:
+                btn.add_css_class("selected")
+            else:
+                btn.remove_css_class("selected")
+
+    def _set_crop_aspect(self, label, ratio):
+        dw, dh = self._display_dims()
+        if ratio is None:
+            r_norm = None
+        elif ratio == "original":
+            r_norm = 1.0  # cw/ch = 1 → output aspect == image aspect
         else:
-            self.edit_crop_btn.remove_css_class("selected")
+            pw, ph = ratio
+            r_norm = (pw / ph) * (dh / dw)
+        self._crop_overlay.set_aspect_ratio(r_norm)
+        self._aspect_label = label
+        self._highlight_aspect()
+
+    def _enter_crop(self):
+        self._crop_mode = True
+        self._editor_geometry_changed()
+        self._crop_backup = (list(self._crop_overlay._crop),
+                             self._edit_image.adjustments().get("straighten", 0.0),
+                             self._crop_overlay._aspect, self._aspect_label)
+        self._crop_overlay.set_active(True)
+        self.edit_tools.set_visible(False)
+        self.edit_crop_panel.set_visible(True)
+        self.edit_cancel_btn.set_visible(False)
+        self.edit_save_btn.set_visible(False)
+        self.edit_crop_btn.add_css_class("selected")
+        self._crop_straighten.set_value(
+            self._edit_image.adjustments().get("straighten", 0.0))
+        self._highlight_aspect()
+
+    def _exit_crop(self, save):
+        if not save and getattr(self, "_crop_backup", None) is not None:
+            crop, straighten, aspect, label = self._crop_backup
+            self._crop_overlay.set_aspect_ratio(aspect, snap=False)
+            self._crop_overlay.set_crop(*crop)
+            self._edit_image.set_adjustment("straighten", straighten)
+            self._crop_straighten.set_value(straighten)
+            self._aspect_label = label
+            self._highlight_aspect()
+        self._crop_backup = None
+        self._crop_mode = False
+        self._crop_overlay.set_active(False)
+        self.edit_tools.set_visible(True)
+        self.edit_crop_panel.set_visible(False)
+        self.edit_cancel_btn.set_visible(True)
+        self.edit_save_btn.set_visible(True)
+        self.edit_crop_btn.remove_css_class("selected")
 
     def _editor_visible(self):
         return self.edit_revealer.get_visible()
@@ -1390,11 +1489,25 @@ class EaselWindow(Adw.ApplicationWindow):
             scale.set_value(0)
         if self._edit_image is not None:
             self._edit_image.reset()
-        self._crop_mode = False
-        self._crop_overlay.set_active(False)
+        self._crop_overlay.set_aspect_ratio(None)
         self._crop_overlay.reset()
-        self.edit_crop_btn.remove_css_class("selected")
+        self._aspect_label = "Free"
+        self._highlight_aspect()
+        if hasattr(self, "_crop_straighten"):
+            self._crop_straighten.set_value(0)
+        self._exit_crop_layout()
         self._select_filter("original")
+
+    def _exit_crop_layout(self):
+        """Return the editor to adjust mode's layout (used on reset/close)."""
+        self._crop_mode = False
+        self._crop_backup = None
+        self._crop_overlay.set_active(False)
+        self.edit_tools.set_visible(True)
+        self.edit_crop_panel.set_visible(False)
+        self.edit_cancel_btn.set_visible(True)
+        self.edit_save_btn.set_visible(True)
+        self.edit_crop_btn.remove_css_class("selected")
 
     def _apply_filter(self, name):
         b, c, s, e, t, tone = self._FILTERS[name]
@@ -1415,9 +1528,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _close_editor(self):
         self.edit_revealer.set_reveal_child(False)
         self.edit_revealer.set_visible(False)
-        self._crop_mode = False
-        self._crop_overlay.set_active(False)
-        self.edit_crop_btn.remove_css_class("selected")
+        self._exit_crop_layout()
         if self._edit_image is not None:
             self._edit_image.set_texture(None)
         self._edit_texture = None

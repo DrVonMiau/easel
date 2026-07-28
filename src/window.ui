@@ -878,7 +878,7 @@
                         </child>
                         <child>
                           <object class="GtkButton" id="edit_save_btn">
-                            <property name="label" translatable="yes">Save</property>
+                            <property name="label" translatable="yes">Save Image</property>
                             <property name="valign">center</property>
                             <style>
                               <class name="editor-save"/>
@@ -927,6 +927,9 @@
                           <class name="om-scroll"/>
                         </style>
                         <property name="child">
+                          <object class="GtkBox" id="edit_tools_wrap">
+                            <property name="orientation">vertical</property>
+                          <child>
                           <object class="GtkBox" id="edit_tools">
                             <property name="orientation">vertical</property>
                             <property name="spacing">16</property>
@@ -1158,6 +1161,19 @@
                                 <style><class name="editor-filters"/></style>
                               </object>
                             </child>
+                          </object>
+                          </child>
+                          <child>
+                            <object class="GtkBox" id="edit_crop_panel">
+                              <property name="orientation">vertical</property>
+                              <property name="spacing">16</property>
+                              <property name="margin-bottom">24</property>
+                              <property name="visible">false</property>
+                              <style>
+                                <class name="editor-panel"/>
+                              </style>
+                            </object>
+                          </child>
                           </object>
                         </property>
                       </object>

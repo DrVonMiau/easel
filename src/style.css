@@ -673,6 +673,14 @@ window.dark .editor-filter.selected {
   box-shadow: inset 0 0 0 2px @easel_blue_light;
 }
 
+/* Crop aspect-ratio chips: text buttons reusing the filter-chip shell. */
+.aspect-chip {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  min-height: 34px;
+  padding: 4px 6px;
+}
+
 /* Filter chips live in a FlowBox; strip the wrapper child's own chrome so the
    chip button is the only visible box. */
 .editor-filters > flowboxchild {
