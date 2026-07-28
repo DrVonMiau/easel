@@ -24,8 +24,8 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, AdjustScale, FilterThumb, Swatch,
-                      load_full_texture, render_adjusted_texture)
+from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FilterThumb,
+                      Swatch, load_full_texture, render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -1240,7 +1240,14 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _setup_editor(self):
         self._edit_image = AdjustableImage()
-        self.edit_image_slot.append(self._edit_image)
+        # The crop rectangle lives in an overlay on top of the canvas so it
+        # shares the image's exact allocation and lines up with it.
+        self._crop_overlay = CropOverlay()
+        self._crop_mode = False
+        edit_overlay = Gtk.Overlay(hexpand=True, vexpand=True)
+        edit_overlay.set_child(self._edit_image)
+        edit_overlay.add_overlay(self._crop_overlay)
+        self.edit_image_slot.append(edit_overlay)
         # Slider value (−100..100) -> adjustment. Brightness is additive (±0.5);
         # contrast and saturation are factors around 1.0.
         self.edit_brightness.connect(
@@ -1255,10 +1262,13 @@ class EaselWindow(Adw.ApplicationWindow):
             "value-changed", lambda s: self._edit_set("temperature", s.get_value() / 100.0))
         # The centre-origin dot on each slider is drawn by EaselAdjustScale
         # itself (see widgets.AdjustScale), so no per-scale setup is needed here.
-        self.edit_rotate_left_btn.connect("clicked", lambda *_: self._edit_image.rotate(-90))
-        self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
+        self.edit_rotate_left_btn.connect("clicked", lambda *_: self._editor_rotate(-90))
+        self.edit_rotate_right_btn.connect("clicked", lambda *_: self._editor_rotate(90))
         self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
         self.edit_flip_v_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("v"))
+        self.edit_crop_btn.set_sensitive(True)
+        self.edit_crop_btn.set_tooltip_text("Crop")
+        self.edit_crop_btn.connect("clicked", lambda *_: self._toggle_crop())
         # Each filter chip carries a live thumbnail of the current photo under
         # that filter (set when the editor opens) plus its name below; built into
         # a wrapping flow so the set can grow without overflowing the panel.
@@ -1300,6 +1310,33 @@ class EaselWindow(Adw.ApplicationWindow):
         if self._edit_image is not None:
             self._edit_image.set_adjustment(name, value)
 
+    def _editor_rotate(self, degrees):
+        self._edit_image.rotate(degrees)
+        # Rotation changes the displayed aspect, so any in-progress crop no
+        # longer maps cleanly — reset it and refit the overlay.
+        self._editor_geometry_changed(reset_crop=True)
+
+    def _editor_geometry_changed(self, reset_crop=False):
+        """Keep the crop overlay's fit in step with the displayed image (its
+        aspect flips on 90/270 rotation)."""
+        tex = self._edit_texture
+        if tex is None or self._crop_overlay is None:
+            return
+        tw, th = tex.get_width(), tex.get_height()
+        rot = self._edit_image.adjustments()["rotation"] % 360
+        disp = (th, tw) if rot in (90, 270) else (tw, th)
+        self._crop_overlay.set_display_size(*disp)
+        if reset_crop:
+            self._crop_overlay.reset()
+
+    def _toggle_crop(self):
+        self._crop_mode = not self._crop_mode
+        self._crop_overlay.set_active(self._crop_mode)
+        if self._crop_mode:
+            self.edit_crop_btn.add_css_class("selected")
+        else:
+            self.edit_crop_btn.remove_css_class("selected")
+
     def _editor_visible(self):
         return self.edit_revealer.get_visible()
 
@@ -1325,6 +1362,7 @@ class EaselWindow(Adw.ApplicationWindow):
         rotation = (row["rotation"] or 0) if "rotation" in row.keys() else 0
         if rotation:
             self._edit_image.set_adjustment("rotation", rotation)
+        self._editor_geometry_changed(reset_crop=True)
         self.edit_revealer.set_visible(True)
         self.edit_revealer.set_reveal_child(True)
 
@@ -1352,6 +1390,10 @@ class EaselWindow(Adw.ApplicationWindow):
             scale.set_value(0)
         if self._edit_image is not None:
             self._edit_image.reset()
+        self._crop_mode = False
+        self._crop_overlay.set_active(False)
+        self._crop_overlay.reset()
+        self.edit_crop_btn.remove_css_class("selected")
         self._select_filter("original")
 
     def _apply_filter(self, name):
@@ -1373,6 +1415,9 @@ class EaselWindow(Adw.ApplicationWindow):
     def _close_editor(self):
         self.edit_revealer.set_reveal_child(False)
         self.edit_revealer.set_visible(False)
+        self._crop_mode = False
+        self._crop_overlay.set_active(False)
+        self.edit_crop_btn.remove_css_class("selected")
         if self._edit_image is not None:
             self._edit_image.set_texture(None)
         self._edit_texture = None
@@ -1402,6 +1447,7 @@ class EaselWindow(Adw.ApplicationWindow):
         if not dest.lower().endswith(".png"):
             dest = os.path.splitext(dest)[0] + ".png"
         adj = self._edit_image.adjustments()
+        adj["crop"] = self._crop_overlay.get_crop()
         self._toast("Saving edited copy…")
         # GSK rendering isn't thread-safe, so render on the main thread. Defer
         # via idle so the toast paints first; a single image is quick.

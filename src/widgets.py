@@ -371,10 +371,20 @@ def render_adjusted_texture(texture, adj):
     node = snapshot.to_node()
     if node is None:
         return None
+    # A crop (normalised display-space x, y, w, h) selects the output sub-region:
+    # render only that rectangle of the composed node, so the texture comes out
+    # already cropped at full resolution.
+    crop = adj.get("crop")
+    if crop:
+        cx, cy, cw, ch = crop
+        vx, vy = cx * out_w, cy * out_h
+        vw, vh = max(1.0, cw * out_w), max(1.0, ch * out_h)
+    else:
+        vx, vy, vw, vh = 0.0, 0.0, out_w, out_h
     renderer = Gsk.CairoRenderer()
     try:
         renderer.realize(None)
-        return renderer.render_texture(node, Graphene.Rect().init(0, 0, out_w, out_h))
+        return renderer.render_texture(node, Graphene.Rect().init(vx, vy, vw, vh))
     except Exception:
         return None
     finally:
@@ -518,6 +528,176 @@ class AdjustScale(Gtk.Scale):
         snapshot.push_rounded_clip(rounded)
         snapshot.append_color(white, rect)
         snapshot.pop()
+
+
+class CropOverlay(Gtk.Widget):
+    """Interactive crop rectangle drawn over the editor image.
+
+    Coordinates are stored normalised (0..1) in *display* space — the image as
+    shown, after rotation/flip — so the same rect maps straight onto the saved
+    render (render_adjusted_texture crops the display-space output by it). The
+    widget shares the image's allocation (it's an overlay child) and fits the
+    display aspect the same contain way the canvas does, so the frame lines up.
+
+    It only draws / takes input while active (crop mode). The crop is applied to
+    the exported image on save, not to the live canvas."""
+
+    __gtype_name__ = "EaselCropOverlay"
+
+    _HANDLE = 16.0   # px hit radius around a handle
+    _MIN = 0.06      # smallest normalised crop extent
+
+    def __init__(self):
+        super().__init__()
+        self._disp_w = 1.0
+        self._disp_h = 1.0
+        self._active = False
+        self._crop = [0.0, 0.0, 1.0, 1.0]  # x0, y0, x1, y1
+        self._drag_handle = None
+        self._drag_start = None
+        self.set_visible(False)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        self.add_controller(drag)
+        self.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_display_size(self, w, h):
+        self._disp_w = max(1.0, float(w))
+        self._disp_h = max(1.0, float(h))
+        self.queue_draw()
+
+    def set_active(self, active):
+        self._active = bool(active)
+        self.set_visible(self._active)
+        self.queue_draw()
+
+    def is_active(self):
+        return self._active
+
+    def reset(self):
+        self._crop = [0.0, 0.0, 1.0, 1.0]
+        self.queue_draw()
+
+    def get_crop(self):
+        """Normalised (x, y, w, h) in display space, or None when it's the whole
+        image (nothing to crop)."""
+        x0, y0, x1, y1 = self._crop
+        if x0 <= 0.002 and y0 <= 0.002 and x1 >= 0.998 and y1 >= 0.998:
+            return None
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def _image_rect(self):
+        """The pixel rect the image occupies in this widget (contain-fit,
+        centred) — matches how AdjustableImage places it."""
+        width, height = self.get_width(), self.get_height()
+        if width <= 0 or height <= 0:
+            return (0.0, 0.0, 0.0, 0.0)
+        scale = min(width / self._disp_w, height / self._disp_h)
+        iw, ih = self._disp_w * scale, self._disp_h * scale
+        return ((width - iw) / 2.0, (height - ih) / 2.0, iw, ih)
+
+    def _crop_px(self):
+        ix, iy, iw, ih = self._image_rect()
+        x0, y0, x1, y1 = self._crop
+        return (ix + x0 * iw, iy + y0 * ih, ix + x1 * iw, iy + y1 * ih)
+
+    @staticmethod
+    def _fill(snapshot, rgba, x, y, w, h):
+        if w > 0 and h > 0:
+            snapshot.append_color(rgba, Graphene.Rect().init(x, y, w, h))
+
+    def do_snapshot(self, snapshot):
+        if not self._active:
+            return
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0 or ih <= 0:
+            return
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        dim = Gdk.RGBA()
+        dim.red = dim.green = dim.blue = 0.0
+        dim.alpha = 0.5
+        # Dim the image outside the crop (four bands).
+        self._fill(snapshot, dim, ix, iy, iw, cy0 - iy)
+        self._fill(snapshot, dim, ix, cy1, iw, iy + ih - cy1)
+        self._fill(snapshot, dim, ix, cy0, cx0 - ix, cy1 - cy0)
+        self._fill(snapshot, dim, cx1, cy0, ix + iw - cx1, cy1 - cy0)
+        white = Gdk.RGBA()
+        white.red = white.green = white.blue = white.alpha = 1.0
+        # Rule-of-thirds guides.
+        guide = Gdk.RGBA()
+        guide.red = guide.green = guide.blue = 1.0
+        guide.alpha = 0.35
+        for t in (1 / 3.0, 2 / 3.0):
+            self._fill(snapshot, guide, cx0 + (cx1 - cx0) * t - 0.5, cy0, 1.0, cy1 - cy0)
+            self._fill(snapshot, guide, cx0, cy0 + (cy1 - cy0) * t - 0.5, cx1 - cx0, 1.0)
+        # Border.
+        t = 2.0
+        self._fill(snapshot, white, cx0, cy0, cx1 - cx0, t)
+        self._fill(snapshot, white, cx0, cy1 - t, cx1 - cx0, t)
+        self._fill(snapshot, white, cx0, cy0, t, cy1 - cy0)
+        self._fill(snapshot, white, cx1 - t, cy0, t, cy1 - cy0)
+        # Handles (corners + edge midpoints).
+        s = 4.0
+        for hx, hy in self._handle_points(cx0, cy0, cx1, cy1).values():
+            self._fill(snapshot, white, hx - s, hy - s, 2 * s, 2 * s)
+
+    @staticmethod
+    def _handle_points(cx0, cy0, cx1, cy1):
+        mx, my = (cx0 + cx1) / 2.0, (cy0 + cy1) / 2.0
+        return {
+            "nw": (cx0, cy0), "ne": (cx1, cy0), "sw": (cx0, cy1), "se": (cx1, cy1),
+            "n": (mx, cy0), "s": (mx, cy1), "w": (cx0, my), "e": (cx1, my),
+        }
+
+    def _on_drag_begin(self, _gesture, start_x, start_y):
+        self._drag_handle = None
+        self._drag_start = list(self._crop)
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0:
+            return
+        cx0, cy0, cx1, cy1 = self._crop_px()
+        for name, (hx, hy) in self._handle_points(cx0, cy0, cx1, cy1).items():
+            if abs(start_x - hx) <= self._HANDLE and abs(start_y - hy) <= self._HANDLE:
+                self._drag_handle = name
+                return
+        if cx0 <= start_x <= cx1 and cy0 <= start_y <= cy1:
+            self._drag_handle = "move"
+
+    def _on_drag_update(self, _gesture, off_x, off_y):
+        if self._drag_handle is None:
+            return
+        ix, iy, iw, ih = self._image_rect()
+        if iw <= 0 or ih <= 0:
+            return
+        dx, dy = off_x / iw, off_y / ih
+        x0, y0, x1, y1 = self._drag_start
+        m = self._MIN
+        h = self._drag_handle
+        if h == "move":
+            w, ht = x1 - x0, y1 - y0
+            nx0 = min(max(0.0, x0 + dx), 1.0 - w)
+            ny0 = min(max(0.0, y0 + dy), 1.0 - ht)
+            self._crop = [nx0, ny0, nx0 + w, ny0 + ht]
+        else:
+            if "w" in h:
+                x0 = min(max(0.0, x0 + dx), x1 - m)
+            if "e" in h:
+                x1 = max(min(1.0, x1 + dx), x0 + m)
+            if "n" in h:
+                y0 = min(max(0.0, y0 + dy), y1 - m)
+            if "s" in h:
+                y1 = max(min(1.0, y1 + dy), y0 + m)
+            self._crop = [x0, y0, x1, y1]
+        self.queue_draw()
+
+    def _on_drag_end(self, _gesture, _off_x, _off_y):
+        self._drag_handle = None
+        self._drag_start = None
 
 
 class Swatch(Gtk.Widget):

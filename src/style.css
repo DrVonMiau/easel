@@ -641,6 +641,15 @@ window.dark .editor {
   background-color: alpha(@window_fg_color, 0.05);
 }
 
+/* Crop tool while active (crop mode on): blue ring, like a pressed toggle. */
+.editor-tool-btn.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue;
+}
+
+window.dark .editor-tool-btn.selected {
+  box-shadow: inset 0 0 0 2px @easel_blue_light;
+}
+
 /* Filter chips — each a live thumbnail of the photo under that filter plus its
    name; the selected one gets a blue ring. */
 .editor-filter {
