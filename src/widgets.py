@@ -423,6 +423,7 @@ class AdjustableImage(Gtk.Widget):
         self._crop = None   # applied crop (x, y, w, h normalised), shown live
         self.set_hexpand(True)
         self.set_vexpand(True)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
 
     def set_texture(self, texture):
         self._texture = texture
@@ -467,23 +468,33 @@ class AdjustableImage(Gtk.Widget):
         if not self._crop:
             _snapshot_adjusted(snapshot, texture, self._adj, width, height)
             return
-        # Cropped preview: render the full displayed image at its native size in
-        # a coordinate space transformed so the crop rect fills the widget,
-        # clipped to the widget. Mirrors what render_adjusted_texture saves.
+        # Cropped preview: draw the whole adjusted image at the on-screen size
+        # its crop region needs to fill the widget, then offset so that region is
+        # centred; overflow is clipped away. Drawing at the final on-screen size
+        # (rather than native size + a scale()) keeps coordinates small and
+        # avoids the renderer culling an off-viewport draw. Matches the region
+        # render_adjusted_texture saves.
         tw, th = texture.get_width(), texture.get_height()
         rot = self._adj["rotation"] % 360
         disp_w, disp_h = (th, tw) if rot in (90, 270) else (tw, th)
         cx, cy, cw, ch = self._crop
-        cxpx, cypx = cx * disp_w, cy * disp_h
-        cwpx, chpx = max(1.0, cw * disp_w), max(1.0, ch * disp_h)
-        s = min(width / cwpx, height / chpx)
-        draw_w, draw_h = cwpx * s, chpx * s
-        snapshot.push_clip(Graphene.Rect().init(0, 0, width, height))
+        cw = max(cw, 1e-3)
+        ch = max(ch, 1e-3)
+        # Scale so the crop region exactly fits the widget (contain).
+        s = min(width / (cw * disp_w), height / (ch * disp_h))
+        full_w, full_h = disp_w * s, disp_h * s      # whole image, on screen
+        crop_w_px, crop_h_px = cw * full_w, ch * full_h
+        crop_left = (width - crop_w_px) / 2.0
+        crop_top = (height - crop_h_px) / 2.0
+        off_x = crop_left - cx * full_w
+        off_y = crop_top - cy * full_h
+        # Clip to the crop rectangle itself, so the rest of the image (which
+        # bleeds into the letter/pillar-box margins) is hidden — otherwise the
+        # preview looks uncropped.
+        snapshot.push_clip(Graphene.Rect().init(crop_left, crop_top, crop_w_px, crop_h_px))
         snapshot.save()
-        snapshot.translate(Graphene.Point().init((width - draw_w) / 2, (height - draw_h) / 2))
-        snapshot.scale(s, s)
-        snapshot.translate(Graphene.Point().init(-cxpx, -cypx))
-        _snapshot_adjusted(snapshot, texture, self._adj, disp_w, disp_h)
+        snapshot.translate(Graphene.Point().init(off_x, off_y))
+        _snapshot_adjusted(snapshot, texture, self._adj, full_w, full_h)
         snapshot.restore()
         snapshot.pop()
 

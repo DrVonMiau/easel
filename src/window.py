@@ -1305,13 +1305,37 @@ class EaselWindow(Adw.ApplicationWindow):
         if self._edit_image is not None:
             self._edit_image.set_adjustment(name, value)
 
+    @staticmethod
+    def _rotate_crop(crop, degrees):
+        """Map a normalised (x, y, w, h) crop through a 90° image rotation so it
+        keeps framing the same content."""
+        if not crop:
+            return None
+        x, y, w, h = crop
+        d = degrees % 360
+        if d == 90:    # clockwise
+            return (1 - y - h, x, h, w)
+        if d == 270:   # counter-clockwise
+            return (y, 1 - x - w, h, w)
+        if d == 180:
+            return (1 - x - w, 1 - y - h, w, h)
+        return crop
+
     def _editor_rotate(self, degrees):
         self._edit_image.rotate(degrees)
-        # Rotation changes the displayed aspect, so any crop (overlay + the one
-        # applied to the canvas) no longer maps cleanly — clear it and refit.
-        self._applied_crop = None
-        self._edit_image.set_crop(None)
-        self._editor_geometry_changed(reset_crop=True)
+        # Rotate the crop with the image so the preview persists. The displayed
+        # aspect swaps, so drop any aspect lock (its ratio no longer matches).
+        self._applied_crop = self._rotate_crop(self._applied_crop, degrees)
+        self._editor_geometry_changed()
+        self._crop_overlay.set_aspect_ratio(None)
+        self._aspect_label = "Free"
+        self._highlight_aspect()
+        if self._applied_crop:
+            x, y, w, h = self._applied_crop
+            self._crop_overlay.set_crop(x, y, x + w, y + h)
+        else:
+            self._crop_overlay.reset()
+        self._edit_image.set_crop(self._applied_crop)
 
     def _display_dims(self):
         """The displayed image's pixel dimensions (post 90° rotation)."""
