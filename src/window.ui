@@ -1149,33 +1149,14 @@
                               </object>
                             </child>
                             <child>
-                              <object class="GtkBox">
-                                <property name="spacing">8</property>
+                              <object class="GtkFlowBox" id="edit_filter_flow">
+                                <property name="selection-mode">none</property>
                                 <property name="homogeneous">true</property>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_original">
-                                    <property name="label" translatable="yes">Original</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_mono">
-                                    <property name="label" translatable="yes">B&amp;W</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_sepia">
-                                    <property name="label" translatable="yes">Sepia</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkButton" id="edit_filter_warm">
-                                    <property name="label" translatable="yes">Warm</property>
-                                    <style><class name="editor-filter"/></style>
-                                  </object>
-                                </child>
+                                <property name="min-children-per-line">4</property>
+                                <property name="max-children-per-line">4</property>
+                                <property name="column-spacing">8</property>
+                                <property name="row-spacing">8</property>
+                                <style><class name="editor-filters"/></style>
                               </object>
                             </child>
                           </object>

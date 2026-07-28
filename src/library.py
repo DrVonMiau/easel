@@ -535,6 +535,22 @@ def set_rotation(con, photo_id, degrees):
     con.commit()
 
 
+def set_photo_path(con, photo_id, new_path):
+    """Point a library photo at a different file on disk (e.g. an edited copy),
+    keeping its favourite / album membership / capture date. Any other row
+    already using new_path is dropped first so the UNIQUE(path) holds. Rotation
+    resets to 0 — an edited copy has any display rotation baked into its pixels."""
+    try:
+        mtime = os.path.getmtime(new_path)
+    except OSError:
+        mtime = 0.0
+    con.execute("DELETE FROM photos WHERE path=? AND id<>?", (new_path, photo_id))
+    con.execute("UPDATE photos SET path=?, mtime=?, rotation=0 WHERE id=?",
+                (new_path, mtime, photo_id))
+    con.commit()
+    prune_orphans(con)
+
+
 def set_album_cover(con, album_id, path):
     con.execute("UPDATE albums SET cover_path=? WHERE id=?", (path, album_id))
     con.commit()

@@ -181,10 +181,7 @@ class EaselWindow(Adw.ApplicationWindow):
     edit_crop_btn = Gtk.Template.Child()
     edit_flip_h_btn = Gtk.Template.Child()
     edit_flip_v_btn = Gtk.Template.Child()
-    edit_filter_original = Gtk.Template.Child()
-    edit_filter_mono = Gtk.Template.Child()
-    edit_filter_sepia = Gtk.Template.Child()
-    edit_filter_warm = Gtk.Template.Child()
+    edit_filter_flow = Gtk.Template.Child()
 
     PANEL_WIDTH = 300
 
@@ -217,6 +214,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._edit_image = None
         self._edit_texture = None
         self._edit_photo = None
+        self._edit_photo_id = None
 
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
@@ -422,6 +420,10 @@ class EaselWindow(Adw.ApplicationWindow):
             act = Gio.SimpleAction.new(name, None)
             act.connect("activate", handler)
             self.add_action(act)
+
+        use_edited = Gio.SimpleAction.new("use-edited", GLib.VariantType.new("s"))
+        use_edited.connect("activate", self._on_use_edited)
+        self.add_action(use_edited)
 
         for i, tab in enumerate(VIEW_NAMES, start=1):
             act = Gio.SimpleAction.new(f"tab-{i}", None)
@@ -1257,28 +1259,27 @@ class EaselWindow(Adw.ApplicationWindow):
         self.edit_rotate_right_btn.connect("clicked", lambda *_: self._edit_image.rotate(90))
         self.edit_flip_h_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("h"))
         self.edit_flip_v_btn.connect("clicked", lambda *_: self._edit_image.toggle_flip("v"))
-        self._edit_filter_btns = {
-            "original": self.edit_filter_original,
-            "mono": self.edit_filter_mono,
-            "sepia": self.edit_filter_sepia,
-            "warm": self.edit_filter_warm,
-        }
         # Each filter chip carries a live thumbnail of the current photo under
-        # that filter (set when the editor opens) plus its name below.
+        # that filter (set when the editor opens) plus its name below; built into
+        # a wrapping flow so the set can grow without overflowing the panel.
+        self._edit_filter_btns = {}
         self._edit_filter_thumbs = {}
-        filter_labels = {"original": "Original", "mono": "B&W",
-                         "sepia": "Sepia", "warm": "Warm"}
-        for name, btn in self._edit_filter_btns.items():
+        for name in self._FILTER_ORDER:
             thumb = FilterThumb(size=54)
             thumb.add_css_class("filter-thumb")
-            label = Gtk.Label(label=filter_labels[name], css_classes=["filter-thumb-label"])
+            label = Gtk.Label(label=self._FILTER_LABELS[name],
+                              css_classes=["filter-thumb-label"])
             chip = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
                            halign=Gtk.Align.CENTER)
             chip.append(thumb)
             chip.append(label)
+            btn = Gtk.Button(css_classes=["editor-filter"])
             btn.set_child(chip)
-            self._edit_filter_thumbs[name] = thumb
+            btn.set_cursor(POINTER_CURSOR)
             btn.connect("clicked", lambda _b, n=name: self._apply_filter(n))
+            self.edit_filter_flow.insert(btn, -1)
+            self._edit_filter_btns[name] = btn
+            self._edit_filter_thumbs[name] = thumb
         self.edit_cancel_btn.connect("clicked", lambda *_: self._close_editor())
         self.edit_save_btn.connect("clicked", lambda *_: self._save_edit())
 
@@ -1314,6 +1315,7 @@ class EaselWindow(Adw.ApplicationWindow):
             self._toast("Couldn't open this image for editing")
             return
         self._edit_photo = row["path"]
+        self._edit_photo_id = row["id"]
         self._edit_texture = texture
         self._reset_editor()
         self._edit_image.set_texture(texture)
@@ -1333,7 +1335,16 @@ class EaselWindow(Adw.ApplicationWindow):
         "mono":     (0, 0, -100, 0, 0, "none"),
         "sepia":    (0, 0, 0, 0, 0, "sepia"),
         "warm":     (0, 5, 8, 0, 45, "none"),
+        "cool":     (0, 5, -5, 0, -45, "none"),
+        "vivid":    (0, 20, 35, 0, 0, "none"),
+        "fade":     (8, -25, -20, 0, 5, "none"),
+        "noir":     (0, 45, -100, 0, 0, "none"),
     }
+    # Display order and labels for the filter chips.
+    _FILTER_ORDER = ("original", "mono", "sepia", "warm", "cool", "vivid", "fade", "noir")
+    _FILTER_LABELS = {"original": "Original", "mono": "B&W", "sepia": "Sepia",
+                      "warm": "Warm", "cool": "Cool", "vivid": "Vivid",
+                      "fade": "Fade", "noir": "Noir"}
 
     def _reset_editor(self):
         for scale in (self.edit_brightness, self.edit_contrast, self.edit_saturation,
@@ -1366,6 +1377,7 @@ class EaselWindow(Adw.ApplicationWindow):
             self._edit_image.set_texture(None)
         self._edit_texture = None
         self._edit_photo = None
+        self._edit_photo_id = None
 
     def _save_edit(self):
         if self._edit_texture is None or self._edit_photo is None:
@@ -1396,36 +1408,50 @@ class EaselWindow(Adw.ApplicationWindow):
         GLib.idle_add(lambda: self._do_save(dest, adj))
 
     def _do_save(self, dest, adj):
-        self._after_save(self._render_and_save(dest, adj), dest)
-        return False
-
-    def _render_and_save(self, dest, adj):
-        # Failures here used to be swallowed silently — the user just saw
-        # "Couldn't save". Log the real reason to stderr so a packaged-runtime
-        # problem is diagnosable, and keep going defensively.
+        # GSK rendering isn't thread-safe, so render on the main thread — but the
+        # expensive part (PNG encode + file write) runs on a worker so the UI
+        # doesn't freeze while a big photo is saved.
         try:
             out = render_adjusted_texture(self._edit_texture, adj)
-            if out is None:
-                print("easel: render_adjusted_texture returned None (save)",
-                      file=sys.stderr)
-                return False
+        except Exception:
+            traceback.print_exc()
+            out = None
+        if out is None:
+            print("easel: render_adjusted_texture returned None (save)", file=sys.stderr)
+            self._after_save(False, dest)
+            return False
+        src = self._edit_photo
+
+        def work():
+            ok = self._encode_and_write(out, dest, src)
+            GLib.idle_add(lambda: self._after_save(ok, dest))
+
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def _encode_and_write(self, texture, dest, src):
+        # Runs off the main thread. `texture` is an immutable memory texture and
+        # `src` a path string, so nothing here touches live UI state.
+        try:
             # Texture -> PNG bytes is the same path the thumbnail cache uses and
             # is known to work here; gdk-pixbuf savers are not usable (glycin).
-            data = out.save_to_png_bytes()
-            with open(dest, "wb") as fh:
+            data = texture.save_to_png_bytes()
+            tmp = f"{dest}.{os.getpid()}.tmp"
+            with open(tmp, "wb") as fh:
                 fh.write(data.get_data())
-            self._copy_metadata(dest)
+            os.replace(tmp, dest)
+            self._copy_metadata_from(src, dest)
             return True
         except Exception:
             traceback.print_exc()
             return False
 
-    def _copy_metadata(self, dest):
+    @staticmethod
+    def _copy_metadata_from(src, dest):
         """Carry the original photo's EXIF (capture date, camera, GPS…) over to
         the saved PNG copy via an eXIf chunk, so edits don't strip the info the
         library organises by. JPEG source only (that's where EXIF lives);
         best-effort — a failure never affects the already-saved image."""
-        src = self._edit_photo
         if not src or not src.lower().endswith((".jpg", ".jpeg")):
             return
         try:
@@ -1440,16 +1466,27 @@ class EaselWindow(Adw.ApplicationWindow):
         if not ok:
             self._toast("Couldn't save the edited copy")
             return False
-        # If the copy landed inside a scanned folder, index it so it shows up.
-        for row in self.con.execute("SELECT path FROM folders").fetchall():
-            base = row["path"].rstrip("/") + "/"
-            if dest.startswith(base):
-                lib.scan_file(self.con, dest)
-                self._reload_all()
-                break
-        self._toast("Saved edited copy")
+        # Offer to show the edited file in place of the original in the library.
+        # Both files stay on disk; "Show edited" just repoints this library entry
+        # (see _on_use_edited). The toast waits (timeout 0) for the decision.
+        toast = Adw.Toast.new("Saved edited copy")
+        if self._edit_photo_id is not None:
+            toast.set_button_label("Show edited")
+            toast.set_action_name("win.use-edited")
+            toast.set_action_target_value(GLib.Variant(
+                "s", json.dumps({"id": self._edit_photo_id, "path": dest})))
+            toast.set_timeout(0)
+        self.toast_overlay.add_toast(toast)
         self._close_editor()
         return False
+
+    def _on_use_edited(self, _action, param):
+        data = json.loads(param.get_string())
+        lib.set_photo_path(self.con, data["id"], data["path"])
+        self._reload_all()
+        if self._info_photo_id == data["id"]:
+            self._show_info(data["id"])
+        self._toast("Now showing the edited version")
 
     def _open_lightbox(self, photos, index):
         if not photos or not (0 <= index < len(photos)):
