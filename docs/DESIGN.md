@@ -134,7 +134,7 @@ these before inventing new styling.
 | `.tabs` (group) | `.tab-group` | `GtkBox` | One rounded container holding every tab |
 | tab separator | `.tab-sep` | `GtkLabel` | Dim `\|` between tab groups |
 | `.photo_tumbnail` | `.swatch`, `.card-swatch` | `EaselSwatch` | Square, radius 10, cover-cropped; striped placeholder when empty |
-| — heart overlay | `.tile-fav` / `.tile-fav.faved` | `GtkButton` | White on dark badge → gold when favourited |
+| — heart overlay | `.tile-fav` / `.tile-fav.faved` | `GtkButton` | Outline heart (white on dark badge) → filled heart tinted gold when favourited |
 | — menu overlay | `.card-menu-btn` | `GtkButton` | Circular, dark scrim |
 | — video badge | `.video-badge` | `GtkImage` | Centred play glyph |
 | Search | `.search-entry` | `GtkSearchEntry` | Mono, radius 8, blue focus border |

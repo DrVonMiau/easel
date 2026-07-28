@@ -580,6 +580,11 @@ class EaselWindow(Adw.ApplicationWindow):
         return box
 
     @staticmethod
+    def _heart_icon(fav):
+        # Filled (gold) heart once favourited; outline heart otherwise.
+        return "easel-heart-filled-symbolic" if fav else "easel-heart-symbolic"
+
+    @staticmethod
     def _tile_faved(box):
         return box._photo is not None and box._photo.favorite
 
@@ -608,8 +613,10 @@ class EaselWindow(Adw.ApplicationWindow):
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
-        # Favourite heart: shown (gold) when faved; hover reveals it otherwise.
+        # Favourite heart: filled + gold when faved (always shown); outline on
+        # hover otherwise.
         tile.fav.set_visible(photo.favorite or tile._motion.get_property("contains-pointer"))
+        tile.fav.set_icon_name(self._heart_icon(photo.favorite))
         if photo.favorite:
             tile.fav.add_css_class("faved")
         else:
@@ -1526,7 +1533,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _update_lightbox_fav(self, photo):
         row = lib.get_photo(self.con, photo.id)
         fav = bool(row["favorite"]) if row else photo.favorite
-        self.lightbox_fav_btn.set_icon_name("easel-heart-symbolic")
+        self.lightbox_fav_btn.set_icon_name(self._heart_icon(fav))
         if fav:
             self.lightbox_fav_btn.add_css_class("faved")
         else:
