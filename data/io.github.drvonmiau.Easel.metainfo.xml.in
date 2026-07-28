@@ -39,6 +39,16 @@
 		<control>pointing</control>
 	</supports>
 	<releases>
+		<release version="0.3.0" date="2026-07-28">
+			<description>
+				<p>Places and people.</p>
+				<ul>
+					<li>A Map view that pins your photos on an offline world map by the GPS location in their metadata — no network, no map account</li>
+					<li>Click a pin to open the photos taken there; nearby shots gather into one pin</li>
+					<li>People: tag someone by name right on a photo, then browse every photo they're in</li>
+				</ul>
+			</description>
+		</release>
 		<release version="0.2.0" date="2026-07-28">
 			<description>
 				<p>Editing and importing arrive.</p>

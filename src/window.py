@@ -7,10 +7,10 @@ full-window lightbox (double click) — and the volume slider becomes a
 thumbnail-size slider.
 
 Tabs are two groups: the primary time views (All Photos / Months / Years) and a
-secondary group (Albums / Favourites / Maps / People). Months and Years show
+secondary group (Albums / Favourites / Map / People). Months and Years show
 bounded period cards that drill into a recycling grid, so a big library never
-loads a tile per photo. Maps and People are placeholders for now — they need
-EXIF GPS and face detection respectively.
+loads a tile per photo. Map pins each geotagged photo on an offline world map;
+People gathers photos by the names the user has tagged into them by hand.
 """
 import json
 import os
@@ -23,9 +23,10 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from . import library as lib
-from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FilterThumb,
-                      Swatch, load_full_texture, render_adjusted_texture)
+from .models import Album, Period, Person, Photo
+from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FacePinLayer,
+                      FilterThumb, MapView, Swatch, load_full_texture,
+                      render_adjusted_texture)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -44,6 +45,12 @@ ALBUM_ENTRIES = [
     (None, None),
     ("Delete album", "delete"),
 ]
+PERSON_ENTRIES = [
+    ("Open", "open"),
+    ("Rename…", "rename-person"),
+    (None, None),
+    ("Remove Person", "delete"),
+]
 
 THEME_SCHEMES = {
     "light": Adw.ColorScheme.FORCE_LIGHT,
@@ -52,8 +59,7 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-# (Maps + People are deferred until GPS/face-detection land.)
-VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites")
+VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites", "map", "people")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -129,6 +135,8 @@ class EaselWindow(Adw.ApplicationWindow):
     tab_years = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
     tab_favourites = Gtk.Template.Child()
+    tab_map = Gtk.Template.Child()
+    tab_people = Gtk.Template.Child()
     search_entry = Gtk.Template.Child()
 
     paper_stack = Gtk.Template.Child()
@@ -137,6 +145,10 @@ class EaselWindow(Adw.ApplicationWindow):
     years_grid = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
     fav_grid = Gtk.Template.Child()
+    map_stack = Gtk.Template.Child()
+    map_slot = Gtk.Template.Child()
+    people_stack = Gtk.Template.Child()
+    people_grid = Gtk.Template.Child()
 
     detail_back_row = Gtk.Template.Child()
     back_btn = Gtk.Template.Child()
@@ -198,6 +210,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self._search_query = ""
         self._photos_all = []
         self._albums_all = []
+        self._persons_all = []
+        self._map_view = None
+        self._gps_backfilled = False
         self._visible_photos = []
         self._visible_favs = []
         self._detail_photos = []
@@ -228,11 +243,14 @@ class EaselWindow(Adw.ApplicationWindow):
             "years": self.tab_years,
             "albums": self.tab_albums,
             "favourites": self.tab_favourites,
+            "map": self.tab_map,
+            "people": self.tab_people,
         }
 
         self._setup_actions()
         self._setup_window_controls()
         self._setup_lists()
+        self._setup_map()
         self._setup_info_panel()
         self._setup_lightbox()
         self._setup_editor()
@@ -452,7 +470,7 @@ class EaselWindow(Adw.ApplicationWindow):
         item_actions = Gio.SimpleActionGroup()
         for name in ("open", "edit-image", "edit-info", "add-to-album",
                      "add-to-new-album", "set-cover", "toggle-fav",
-                     "rename-album", "delete"):
+                     "rename-album", "rename-person", "delete"):
             act = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             act.connect("activate", self._on_item_action)
             item_actions.add_action(act)
@@ -492,6 +510,18 @@ class EaselWindow(Adw.ApplicationWindow):
         self.years_grid.set_factory(self._factory(self._bind_period_card))
         self.years_grid.set_single_click_activate(True)
         self.years_grid.connect("activate", self._on_period_activated)
+
+        self.people_store = Gio.ListStore(item_type=Person)
+        self.people_grid.set_model(Gtk.SingleSelection(model=self.people_store))
+        self.people_grid.set_factory(self._factory(self._bind_person_card))
+        self.people_grid.set_single_click_activate(True)
+        self.people_grid.connect(
+            "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
+
+    def _setup_map(self):
+        self._map_view = MapView()
+        self._map_view.set_activate_cb(self._on_map_pin)
+        self.map_slot.append(self._map_view)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -910,6 +940,17 @@ class EaselWindow(Adw.ApplicationWindow):
             self._select_tab("albums")
             self._open_album(item_id)
             return
+        if name == "open" and kind == "person":
+            self._select_tab("people")
+            self._open_person(item_id)
+            return
+        if name == "rename-person":
+            person = lib.get_person(self.con, item_id)
+            if person:
+                self._prompt_name(
+                    "Rename Person", person["name"],
+                    lambda text: self._do_rename_person(item_id, text))
+            return
         if name == "edit-image":
             self._open_editor(item_id)
             return
@@ -950,6 +991,12 @@ class EaselWindow(Adw.ApplicationWindow):
                     lib.rename_album(self.con, item_id, text), self._reload_all()))
             return
 
+    def _do_rename_person(self, person_id, text):
+        if not lib.rename_person(self.con, person_id, text):
+            self._toast("Another person already has that name")
+            return
+        self._reload_all()
+
     def _toggle_fav(self, photo_id):
         row = lib.get_photo(self.con, photo_id)
         if not row:
@@ -966,6 +1013,11 @@ class EaselWindow(Adw.ApplicationWindow):
                 heading = "Remove album?"
                 body = ("This removes the folder's photos from your library. "
                         "Files on disk are not touched.")
+        elif kind == "person":
+            person = lib.get_person(self.con, item_id)
+            heading = "Remove person?"
+            body = (f"This removes {person['name']} and all their tags. "
+                    "Your photos are not touched.") if person else "Remove this person?"
         else:
             heading = "Delete picture?"
             body = "This only removes it from your library. The file on disk is not touched."
@@ -977,11 +1029,12 @@ class EaselWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def _do_delete(self, kind, item_id):
-        {"photo": lib.delete_photo, "album": lib.delete_album}[kind](self.con, item_id)
+        {"photo": lib.delete_photo, "album": lib.delete_album,
+         "person": lib.delete_person}[kind](self.con, item_id)
         if kind == "photo" and self._info_photo_id == item_id:
             self._close_info()
-        if (self.view == "detail" and kind == "album"
-                and self._detail_source and self._detail_source[0] == "album"
+        if (self.view == "detail" and self._detail_source
+                and self._detail_source[0] == kind
                 and self._detail_source[1] == item_id):
             self._go_back()
         self._reload_all()
@@ -1056,7 +1109,14 @@ class EaselWindow(Adw.ApplicationWindow):
         # can't be stretched wide by a big image's natural size (the old bug).
         self._info_preview = Swatch("", size=self.PANEL_WIDTH)
         self._info_preview.add_css_class("info-preview")
-        self.info_preview_slot.set_child(self._info_preview)
+        # A pin overlay on top of the preview shows tagged people and turns a
+        # click on the photo into a place-a-name action.
+        self._face_layer = FacePinLayer()
+        self._face_layer.set_place_cb(self._on_face_place)
+        preview_overlay = Gtk.Overlay()
+        preview_overlay.set_child(self._info_preview)
+        preview_overlay.add_overlay(self._face_layer)
+        self.info_preview_slot.set_child(preview_overlay)
         self.info_close_btn.connect("clicked", lambda *_: self._close_info())
         self.info_fullscreen_btn.connect("clicked", lambda *_: self._info_fullscreen())
         self.info_rotate_left_btn.connect("clicked", lambda *_: self._rotate_info(-90))
@@ -1078,6 +1138,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_preview.set_path(row["path"], rotation=self._photo_rotation(row))
 
         self._clear_box(self.info_rows_box)
+        # People tagged in this photo, with their pins shown on the preview.
+        faces = lib.faces_for_photo(self.con, photo_id)
+        self._face_layer.set_faces([(f["x"], f["y"]) for f in faces])
+        self.info_rows_box.append(self._people_section(photo_id, faces))
+        self.info_rows_box.append(self._info_divider())
         dims = _dimensions(row["path"])
         try:
             size = _fmt_size(os.path.getsize(row["path"]))
@@ -1204,6 +1269,112 @@ class EaselWindow(Adw.ApplicationWindow):
         popover.set_parent(button)
         popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
         popover.popup()
+
+    # ---------- people tagging (info panel) ----------
+
+    def _people_section(self, photo_id, faces):
+        """The 'In this photo' block: a removable chip per tagged person, plus
+        an Add button. The photo preview above is also click-to-tag."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.append(Gtk.Label(label="In this photo", xalign=0,
+                             css_classes=["info-key"]))
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
+                           column_spacing=6, row_spacing=6, hexpand=True,
+                           max_children_per_line=6, css_classes=["people-chips"])
+        for f in faces:
+            flow.append(self._person_chip(photo_id, f["person_id"], f["name"]))
+        add_btn = Gtk.Button(css_classes=["flat", "person-add-chip"])
+        add_btn.set_child(Gtk.Label(label="Add name"))
+        add_btn.set_cursor(POINTER_CURSOR)
+        add_btn.connect(
+            "clicked", lambda b: self._add_person_popover(photo_id, b, 0.5, 0.5))
+        flow.append(add_btn)
+        box.append(flow)
+        if not faces:
+            box.append(Gtk.Label(
+                label="Tip: click the photo above to pin a name where someone is.",
+                xalign=0, wrap=True, css_classes=["mono-dim-sm"]))
+        return box
+
+    def _person_chip(self, photo_id, person_id, name):
+        chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2,
+                       css_classes=["person-chip"])
+        label = Gtk.Label(label=name, css_classes=["person-chip-name"],
+                          ellipsize=Pango.EllipsizeMode.END)
+        label.set_cursor(POINTER_CURSOR)
+        gesture = Gtk.GestureClick(button=1)
+        gesture.connect("released", lambda *_a: self._open_person_from_info(person_id))
+        label.add_controller(gesture)
+        remove = Gtk.Button(icon_name="easel-x-symbolic",
+                            css_classes=["flat", "person-chip-x"],
+                            tooltip_text="Remove tag")
+        remove.set_cursor(POINTER_CURSOR)
+        remove.connect("clicked", lambda *_a: self._untag_person(photo_id, person_id))
+        chip.append(label)
+        chip.append(remove)
+        return chip
+
+    def _open_person_from_info(self, person_id):
+        if lib.get_person(self.con, person_id):
+            self._select_tab("people")
+            self._open_person(person_id)
+
+    def _untag_person(self, photo_id, person_id):
+        lib.remove_face(self.con, photo_id, person_id)
+        self._people_changed(photo_id)
+
+    def _on_face_place(self, nx, ny, px, py):
+        if self._info_photo_id is not None:
+            self._add_person_popover(self._info_photo_id, self._face_layer,
+                                     nx, ny, px, py)
+
+    def _add_person_popover(self, photo_id, anchor, x, y, px=None, py=None):
+        popover = Gtk.Popover(css_classes=["person-popover"])
+        popover.set_parent(anchor)
+        if px is not None:
+            popover.set_pointing_to(
+                Gdk.Rectangle(x=int(px), y=int(py), width=1, height=1))
+        entry = Gtk.Entry(placeholder_text="Name", activates_default=True)
+        entry.set_size_request(180, -1)
+        # Offer the names already in use so a person is re-tagged, not duplicated.
+        store = Gtk.ListStore(str)
+        for p in self._persons_all:
+            store.append([p.name])
+        completion = Gtk.EntryCompletion()
+        completion.set_model(store)
+        completion.set_text_column(0)
+        completion.set_inline_completion(True)
+        completion.set_popup_completion(True)
+        entry.set_completion(completion)
+
+        def commit(*_a):
+            name = entry.get_text().strip()
+            if name:
+                lib.tag_person(self.con, photo_id, name, x, y)
+                self._people_changed(photo_id)
+            popover.popdown()
+
+        entry.connect("activate", commit)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+        popover.set_child(entry)
+        popover.popup()
+        entry.grab_focus()
+
+    def _people_changed(self, photo_id):
+        """Refresh everything that reflects a tag change without a full reload:
+        the People data, an open person page, and the info panel's section."""
+        self._persons_all = [
+            Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
+                   cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
+            for r in lib.all_persons(self.con)
+        ]
+        if self.view == "people":
+            self._render_people()
+        elif (self.view == "detail" and self._detail_source
+              and self._detail_source[0] == "person"):
+            self._render_detail()
+        if self._info_photo_id == photo_id:
+            self._show_info(photo_id)
 
     def _close_info(self):
         self.info_revealer.set_reveal_child(False)
@@ -2052,6 +2223,10 @@ class EaselWindow(Adw.ApplicationWindow):
                 self._render_months()
             elif name == "years":
                 self._render_years()
+            elif name == "map":
+                self._render_map()
+            elif name == "people":
+                self._render_people()
         self.detail_back_row.set_visible(False)
         self._update_sort_button()
         for key, btn in self._tab_buttons.items():
@@ -2101,6 +2276,16 @@ class EaselWindow(Adw.ApplicationWindow):
             photos = [self._photo_from_row(r)
                       for r in lib.photos_by_album(self.con, album["id"])]
             date = _fmt_date(album["date_taken"])
+        elif source[0] == "person":
+            person = lib.get_person(self.con, source[1])
+            if not person:
+                self._go_back()
+                return
+            kind_label, title = "Person", person["name"]
+            photos = [self._photo_from_row(r)
+                      for r in lib.photos_for_person(self.con, person["id"])]
+            cover = photos[0].path if photos else None
+            date = ""
         else:  # ("period", kind, key, title)
             _, kind, key, title = source
             kind_label = "Month" if kind == "month" else "Year"
@@ -2127,6 +2312,80 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_store.remove_all()
         for p in self._detail_photos:
             self.detail_store.append(p)
+
+    # ---------- map view ----------
+
+    def _render_map(self):
+        """Pin every geotagged photo on the offline world map. The first time
+        it's opened in a session we also read GPS from any photo that hasn't
+        been checked yet (a background pass), then refresh the pins."""
+        rows = lib.photos_with_location(self.con)
+        entries = [(r["lon"], r["lat"], self._photo_from_row(r)) for r in rows]
+        self._map_view.set_photos(entries)
+        self.map_stack.set_visible_child_name("view" if entries else "empty")
+        self._maybe_backfill_locations()
+
+    def _maybe_backfill_locations(self):
+        if self._gps_backfilled or not self._photos_all:
+            return
+        self._gps_backfilled = True
+
+        def work():
+            found = lib.backfill_locations(self.con)
+            if found:
+                GLib.idle_add(self._refresh_map_if_current)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_map_if_current(self):
+        if self.view == "map":
+            self._render_map()
+        return False
+
+    def _on_map_pin(self, photos):
+        """A map pin was clicked: open its photos in the lightbox."""
+        if photos:
+            self._open_lightbox(photos, 0)
+
+    # ---------- people view ----------
+
+    def _render_people(self):
+        self.people_store.remove_all()
+        for person in self._persons_all:
+            self.people_store.append(person)
+        self.people_stack.set_visible_child_name(
+            "view" if self._persons_all else "empty")
+
+    def _bind_person_card(self, item):
+        person = item.get_item()
+        box = item.get_child()
+        if not hasattr(box, "swatch"):
+            box = self._album_card_widget()
+            box.swatch.add_css_class("avatar")
+            item.set_child(box)
+        box.swatch.set_placeholder("person")
+        box.swatch.set_path(person.cover_path or None)
+        box.title.set_label(person.name)
+        count = person.photo_count
+        box.subtitle.set_label(f"{count} photo{'s' if count != 1 else ''}")
+        self._attach_person_menu(box, person.id)
+
+    def _attach_person_menu(self, box, person_id):
+        box._menu_kind = "person"
+        box._menu_item_id = person_id
+        box._menu_entries = PERSON_ENTRIES
+        box._menu_extra = {}
+        if getattr(box, "_person_menu_attached", False):
+            return
+        box._person_menu_attached = True
+        gesture = Gtk.GestureClick(button=3)
+        gesture.connect("pressed", lambda _g, _n, x, y: self._show_item_menu(box, box, x, y))
+        box.add_controller(gesture)
+
+    def _open_person(self, person_id):
+        if not lib.get_person(self.con, person_id):
+            return
+        self._open_detail(("person", person_id))
 
     # ---------- search / filters ----------
 
@@ -2221,6 +2480,11 @@ class EaselWindow(Adw.ApplicationWindow):
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",
                   date_taken=r["date_taken"] or 0.0)
             for r in lib.all_albums(self.con)
+        ]
+        self._persons_all = [
+            Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
+                   cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
+            for r in lib.all_persons(self.con)
         ]
         self._apply_filters()
         if self.view == "detail" and self._detail_source is not None:

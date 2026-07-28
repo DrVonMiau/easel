@@ -23,6 +23,18 @@ class Album(GObject.Object):
     date_taken = GObject.Property(type=float, default=0.0)
 
 
+class Person(GObject.Object):
+    """Someone the user has tagged into photos by hand (Easel does no face
+    recognition). Shown as a card in the People view; opening it lists every
+    photo they're tagged in."""
+    __gtype_name__ = "Person"
+    id = GObject.Property(type=int, default=0)
+    name = GObject.Property(type=str, default="")
+    photo_count = GObject.Property(type=int, default=0)
+    cover_path = GObject.Property(type=str, default="")
+    date_taken = GObject.Property(type=float, default=0.0)
+
+
 class Period(GObject.Object):
     """A time bucket (a month or a year) shown as a single summary card in the
     Months/Years views. Keeping one card per period — instead of one tile per

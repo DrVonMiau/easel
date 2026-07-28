@@ -204,6 +204,24 @@
                             </style>
                           </object>
                         </child>
+                        <child>
+                          <object class="GtkButton" id="tab_map">
+                            <property name="label" translatable="yes">Map</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_people">
+                            <property name="label" translatable="yes">People</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
                       </object>
                     </property>
                   </object>
@@ -467,6 +485,100 @@
                                 </style>
                               </object>
                             </property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">map</property>
+                        <property name="child">
+                          <object class="GtkStack" id="map_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">120</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage">
+                                    <property name="icon-name">easel-map-symbolic</property>
+                                    <property name="title" translatable="yes">No places yet</property>
+                                    <property name="description" translatable="yes">Photos with GPS location appear here, pinned on a world map. Import photos that carry location data to see them placed.</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">view</property>
+                                <property name="child">
+                                  <object class="GtkBox" id="map_slot">
+                                    <property name="orientation">vertical</property>
+                                    <property name="hexpand">true</property>
+                                    <property name="vexpand">true</property>
+                                    <property name="margin-top">24</property>
+                                    <property name="margin-bottom">24</property>
+                                    <property name="margin-start">24</property>
+                                    <property name="margin-end">24</property>
+                                    <style>
+                                      <class name="map-slot"/>
+                                    </style>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">people</property>
+                        <property name="child">
+                          <object class="GtkStack" id="people_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">120</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage">
+                                    <property name="icon-name">easel-people-symbolic</property>
+                                    <property name="title" translatable="yes">No people yet</property>
+                                    <property name="description" translatable="yes">Tag someone in a photo — open a photo's info and add a name — and they'll show up here, gathering every photo they're in.</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">view</property>
+                                <property name="child">
+                                  <object class="GtkScrolledWindow">
+                                    <property name="hscrollbar-policy">never</property>
+                                    <style>
+                                      <class name="om-scroll"/>
+                                    </style>
+                                    <property name="child">
+                                      <object class="GtkGridView" id="people_grid">
+                                        <property name="min-columns">2</property>
+                                        <property name="max-columns">8</property>
+                                        <property name="margin-top">24</property>
+                                        <property name="margin-bottom">1</property>
+                                        <property name="margin-start">24</property>
+                                        <property name="margin-end">24</property>
+                                        <property name="single-click-activate">true</property>
+                                        <style>
+                                          <class name="card-grid"/>
+                                        </style>
+                                      </object>
+                                    </property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
                           </object>
                         </property>
                       </object>

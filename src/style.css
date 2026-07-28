@@ -745,3 +745,78 @@ window.dark .editor-scale slider {
 
 /* The centre-origin dot marking each slider's neutral value is painted by
    EaselAdjustScale in do_snapshot (on top of the fill), not via CSS marks. */
+
+/* ============================================================================
+   MAP + PEOPLE
+   ============================================================================ */
+
+/* The Map view fills the paper with a soft rounded panel; the world map and
+   pins are drawn by EaselMapView in do_snapshot. */
+.map-slot {
+  background-color: alpha(@window_fg_color, 0.03);
+  border-radius: 16px;               /* radius token: card = 16 */
+}
+
+/* Round avatar for People cards — a circular crop of a photo the person is in.
+   The swatch clips to this radius (overflow hidden), turning the square cover
+   into a circle. */
+.swatch.avatar {
+  border-radius: 9999px;
+}
+
+/* "In this photo" people chips in the info panel. */
+.people-chips {
+  padding: 0;
+}
+
+.person-chip {
+  padding: 2px 2px 2px 10px;
+  border-radius: 9999px;
+  background-color: alpha(@easel_blue, 0.14);
+}
+
+.person-chip-name {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: @easel_blue;
+}
+
+window.dark .person-chip-name {
+  color: @easel_blue_light;
+}
+
+.person-chip-x {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border-radius: 9999px;
+  -gtk-icon-size: 12px;
+  color: @easel_blue;
+}
+
+window.dark .person-chip-x {
+  color: @easel_blue_light;
+}
+
+.person-chip-x:hover {
+  background-color: alpha(@easel_blue, 0.2);
+}
+
+/* The "Add name" chip mirrors a person chip but reads as an action. */
+.person-add-chip {
+  padding: 4px 12px;
+  border-radius: 9999px;
+  background-color: alpha(@window_fg_color, 0.07);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: alpha(@window_fg_color, 0.7);
+}
+
+.person-add-chip:hover {
+  background-color: alpha(@easel_blue, 0.14);
+  color: @easel_blue;
+}
+
+.person-popover > contents {
+  padding: 8px;
+}

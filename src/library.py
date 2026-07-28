@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS albums(
 CREATE TABLE IF NOT EXISTS photos(
   id INTEGER PRIMARY KEY, path TEXT UNIQUE,
   mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0,
-  rotation INTEGER DEFAULT 0);
+  rotation INTEGER DEFAULT 0,
+  lat REAL, lon REAL);
 CREATE TABLE IF NOT EXISTS album_photos(
   album_id INTEGER NOT NULL, photo_id INTEGER NOT NULL,
   UNIQUE(album_id, photo_id),
@@ -33,6 +34,21 @@ CREATE TABLE IF NOT EXISTS album_photos(
   FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_ap_album ON album_photos(album_id);
 CREATE INDEX IF NOT EXISTS idx_ap_photo ON album_photos(photo_id);
+
+-- People: manual, hand-made tags (a name pinned onto a photo). No face
+-- recognition — every row here was placed by the user. A person can appear at
+-- most once per photo; the pin's normalised (x, y) records where the user
+-- pointed so it can be shown back on the image.
+CREATE TABLE IF NOT EXISTS persons(id INTEGER PRIMARY KEY, name TEXT UNIQUE);
+CREATE TABLE IF NOT EXISTS faces(
+  id INTEGER PRIMARY KEY,
+  photo_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+  x REAL, y REAL,
+  UNIQUE(photo_id, person_id),
+  FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+  FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 """
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif",
@@ -59,6 +75,14 @@ def connect():
         con.commit()
     except sqlite3.OperationalError:
         pass
+    # Migration for libraries created before the Map view (GPS columns). NULL
+    # lat/lon means "not read yet"; backfill_locations fills them in lazily.
+    for col in ("lat", "lon"):
+        try:
+            con.execute(f"ALTER TABLE photos ADD COLUMN {col} REAL")
+            con.commit()
+        except sqlite3.OperationalError:
+            pass
     # One-off cleanup for libraries scanned before hidden files were skipped:
     # drop any indexed dotfile / AppleDouble sidecar (a "/." anywhere in the
     # path means a hidden path component). Cascades to album_photos.
@@ -230,6 +254,137 @@ def _exif_datetime(path):
     return None
 
 
+def _find_exif_tiff(path):
+    """Locate a JPEG's EXIF block and return (tiff_bytes, byte_order) where
+    tiff_bytes starts at the TIFF header (right after 'Exif\\x00\\x00') and
+    byte_order is '<' or '>'. Returns (None, None) if there's no readable EXIF.
+    Shared by the GPS reader; the older date reader keeps its own inline walk."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(256 * 1024)
+    except OSError:
+        return None, None
+    if head[:2] != b"\xff\xd8":  # not a JPEG
+        return None, None
+    i = 2
+    exif = None
+    while i + 4 <= len(head):
+        if head[i] != 0xFF:
+            break
+        marker = head[i + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", head[i + 2:i + 4])[0]
+        seg = head[i + 4:i + 2 + seg_len]
+        if marker == 0xE1 and seg[:6] == b"Exif\x00\x00":
+            exif = seg[6:]
+            break
+        if marker == 0xDA:  # start of scan — no metadata past here
+            break
+        i += 2 + seg_len
+    if not exif or len(exif) < 8:
+        return None, None
+    bo = "<" if exif[:2] == b"II" else ">" if exif[:2] == b"MM" else None
+    if bo is None:
+        return None, None
+    return exif, bo
+
+
+def _gps_rationals(exif, bo, off, count):
+    """Read `count` EXIF RATIONALs (each two u32: numerator/denominator) starting
+    at `off`, as a list of floats. Returns None on any malformed entry."""
+    out = []
+    for k in range(count):
+        base = off + k * 8
+        if base + 8 > len(exif):
+            return None
+        num = struct.unpack(bo + "I", exif[base:base + 4])[0]
+        den = struct.unpack(bo + "I", exif[base + 4:base + 8])[0]
+        out.append(num / den if den else 0.0)
+    return out
+
+
+def _exif_gps(path):
+    """The photo's capture location as (lat, lon) in signed decimal degrees, or
+    None if the file carries no readable GPS EXIF. Self-contained, like the date
+    reader — no gdk-pixbuf/glycin and no extra dependency.
+
+    Walks IFD0 to the GPS sub-IFD (tag 0x8825) and reads GPSLatitude/Longitude
+    (three RATIONALs: degrees, minutes, seconds) with their N/S and E/W refs."""
+    exif, bo = _find_exif_tiff(path)
+    if exif is None:
+        return None
+
+    def u16(o):
+        return struct.unpack(bo + "H", exif[o:o + 2])[0]
+
+    def u32(o):
+        return struct.unpack(bo + "I", exif[o:o + 4])[0]
+
+    try:
+        ifd0 = u32(4)
+        if ifd0 <= 0 or ifd0 + 2 > len(exif):
+            return None
+        # Find the GPS Info IFD pointer (tag 0x8825, LONG) inside IFD0.
+        gps_off = None
+        count = u16(ifd0)
+        entry = ifd0 + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            if u16(entry) == 0x8825:
+                gps_off = u32(entry + 8)
+                break
+            entry += 12
+        if not gps_off or gps_off + 2 > len(exif):
+            return None
+        # Read the GPS IFD: refs (ASCII) and lat/lon (three RATIONALs each).
+        lat = lon = None
+        lat_ref = lon_ref = None
+        count = u16(gps_off)
+        entry = gps_off + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            tag = u16(entry)
+            typ = u16(entry + 2)
+            n = u32(entry + 4)
+            val_off = entry + 8
+            if tag == 1 and typ == 2:            # GPSLatitudeRef (N/S)
+                lat_ref = exif[val_off:val_off + 1].decode("ascii", "ignore")
+            elif tag == 3 and typ == 2:          # GPSLongitudeRef (E/W)
+                lon_ref = exif[val_off:val_off + 1].decode("ascii", "ignore")
+            elif tag == 2 and typ == 5 and n >= 2:   # GPSLatitude
+                lat = _gps_rationals(exif, bo, u32(val_off), min(n, 3))
+            elif tag == 4 and typ == 5 and n >= 2:   # GPSLongitude
+                lon = _gps_rationals(exif, bo, u32(val_off), min(n, 3))
+            entry += 12
+        if not lat or not lon:
+            return None
+    except (struct.error, IndexError, ValueError):
+        return None
+
+    def to_deg(parts):
+        d = parts[0] if len(parts) > 0 else 0.0
+        m = parts[1] if len(parts) > 1 else 0.0
+        s = parts[2] if len(parts) > 2 else 0.0
+        return d + m / 60.0 + s / 3600.0
+
+    latitude = to_deg(lat)
+    longitude = to_deg(lon)
+    if (lat_ref or "").upper() == "S":
+        latitude = -latitude
+    if (lon_ref or "").upper() == "W":
+        longitude = -longitude
+    # Reject obviously bogus fixes (some cameras write 0,0 or out-of-range).
+    if not (-90.0 <= latitude <= 90.0) or not (-180.0 <= longitude <= 180.0):
+        return None
+    if abs(latitude) < 1e-6 and abs(longitude) < 1e-6:
+        return None
+    return round(latitude, 6), round(longitude, 6)
+
+
 def read_exif_segment(path):
     """Return the raw APP1 payload (starting b'Exif\\x00\\x00') of a JPEG, ready
     to be spliced into another JPEG, or None if there's none to copy.
@@ -389,9 +544,11 @@ def scan_file(con, path):
                 con.execute("UPDATE photos SET date_taken=? WHERE id=?",
                             (fresh, photo_id))
     else:
+        gps = _exif_gps(path)
+        lat, lon = gps if gps else (None, None)
         photo_id = con.execute(
-            "INSERT INTO photos(path, mtime, date_taken) VALUES (?,?,?)",
-            (path, mtime, _date_taken(path)),
+            "INSERT INTO photos(path, mtime, date_taken, lat, lon) VALUES (?,?,?,?,?)",
+            (path, mtime, _date_taken(path), lat, lon),
         ).lastrowid
     con.execute(
         "INSERT OR IGNORE INTO album_photos(album_id, photo_id) VALUES (?,?)",
@@ -525,6 +682,144 @@ def set_photo_date(con, photo_id, date_taken):
     Months/Days views follow it immediately. (Writing it back into the file's
     EXIF is a later addition.)"""
     con.execute("UPDATE photos SET date_taken=? WHERE id=?", (date_taken, photo_id))
+    con.commit()
+
+
+# ---------- locations (Map view) ----------
+
+def backfill_locations(con, progress_cb=None):
+    """Read GPS from any photo whose location hasn't been extracted yet (lat is
+    NULL — either never scanned for GPS, or migrated from an older library).
+    Returns the number of photos that gained a location. Safe to run in a worker
+    thread; commits in one batch at the end.
+
+    Photos with no GPS stay NULL, so a later call re-checks them — cheap unless
+    the library is huge, and the Map view only triggers this once per session."""
+    rows = con.execute(
+        "SELECT id, path FROM photos WHERE lat IS NULL").fetchall()
+    total = len(rows)
+    found = 0
+    for i, row in enumerate(rows):
+        gps = _exif_gps(row["path"])
+        if gps:
+            con.execute("UPDATE photos SET lat=?, lon=? WHERE id=?",
+                        (gps[0], gps[1], row["id"]))
+            found += 1
+        if progress_cb:
+            progress_cb(i + 1, total)
+    con.commit()
+    return found
+
+
+def photos_with_location(con):
+    """Every geotagged photo, newest first — the data the Map view pins."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY photos.date_taken DESC, photos.path"""
+    ).fetchall()
+
+
+# ---------- people (manual tagging) ----------
+
+def get_or_create_person(con, name):
+    """The person id for a name, creating the person on first use. Names are
+    matched case-insensitively so 'Ada' and 'ada' are the same person, but the
+    first spelling the user typed is the one that's stored."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = con.execute(
+        "SELECT id FROM persons WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return con.execute("INSERT INTO persons(name) VALUES (?)", (name,)).lastrowid
+
+
+def tag_person(con, photo_id, name, x=0.5, y=0.5):
+    """Tag a person into a photo at a normalised (x, y) pin, creating the person
+    if new. Re-tagging the same person just moves their pin. Returns the
+    person id, or None if the name was blank."""
+    person_id = get_or_create_person(con, name)
+    if person_id is None:
+        return None
+    con.execute(
+        """INSERT INTO faces(photo_id, person_id, x, y) VALUES (?,?,?,?)
+           ON CONFLICT(photo_id, person_id) DO UPDATE SET x=excluded.x, y=excluded.y""",
+        (photo_id, person_id, x, y),
+    )
+    con.commit()
+    return person_id
+
+
+def remove_face(con, photo_id, person_id):
+    """Untag a person from a photo. The person themselves is kept even if this
+    was their last photo, so their name stays available for re-tagging."""
+    con.execute("DELETE FROM faces WHERE photo_id=? AND person_id=?",
+                (photo_id, person_id))
+    con.commit()
+
+
+def faces_for_photo(con, photo_id):
+    """The people tagged in a photo: rows of (person_id, name, x, y)."""
+    return con.execute(
+        """SELECT f.person_id, p.name, f.x, f.y FROM faces f
+           JOIN persons p ON p.id = f.person_id
+           WHERE f.photo_id=? ORDER BY p.name COLLATE NOCASE""",
+        (photo_id,),
+    ).fetchall()
+
+
+def all_persons(con):
+    """Everyone who's been tagged, with how many photos they're in and a cover
+    (their most recent photo). People with no photos left are dropped so the
+    People view never shows empty cards."""
+    return con.execute(
+        """SELECT p.id, p.name,
+             (SELECT COUNT(*) FROM faces WHERE faces.person_id = p.id) AS photo_count,
+             (SELECT ph.path FROM faces f JOIN photos ph ON ph.id = f.photo_id
+              WHERE f.person_id = p.id ORDER BY ph.date_taken DESC LIMIT 1) AS cover_path,
+             (SELECT MAX(ph.date_taken) FROM faces f JOIN photos ph ON ph.id = f.photo_id
+              WHERE f.person_id = p.id) AS date_taken
+           FROM persons p
+           WHERE EXISTS (SELECT 1 FROM faces WHERE faces.person_id = p.id)
+           ORDER BY p.name COLLATE NOCASE"""
+    ).fetchall()
+
+
+def get_person(con, person_id):
+    return con.execute("SELECT id, name FROM persons WHERE id=?",
+                       (person_id,)).fetchone()
+
+
+def photos_for_person(con, person_id):
+    """Every photo a person is tagged in, newest first."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM faces f
+            JOIN photos ON photos.id = f.photo_id
+            WHERE f.person_id=? ORDER BY photos.date_taken DESC, photos.path""",
+        (person_id,),
+    ).fetchall()
+
+
+def rename_person(con, person_id, name):
+    """Rename a person, unless the new name collides with someone else."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    clash = con.execute(
+        "SELECT id FROM persons WHERE name=? COLLATE NOCASE AND id<>?",
+        (name, person_id)).fetchone()
+    if clash:
+        return False
+    con.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
+    con.commit()
+    return True
+
+
+def delete_person(con, person_id):
+    """Forget a person entirely; their tags are removed (ON DELETE CASCADE)."""
+    con.execute("DELETE FROM persons WHERE id=?", (person_id,))
     con.commit()
 
 

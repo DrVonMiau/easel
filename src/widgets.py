@@ -13,6 +13,8 @@ from collections import OrderedDict
 
 from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk
 
+from . import worldmap
+
 # Report the first few image-load failures to stderr, with the reason, so a
 # problem that only shows up in the packaged runtime (a permission error vs a
 # decode error) is diagnosable from the run console instead of guesswork.
@@ -907,3 +909,289 @@ class Swatch(Gtk.Widget):
             snapshot.append_color(rgba, Graphene.Rect().init(-diag, y, diag * 2, STRIPE_WIDTH))
             y += STRIPE_STEP
         snapshot.restore()
+
+
+POINTER_CURSOR = Gdk.Cursor.new_from_name("pointer")
+
+
+def _rgba(r, g, b, a):
+    c = Gdk.RGBA()
+    c.red, c.green, c.blue, c.alpha = r, g, b, a
+    return c
+
+
+# Pin accent — Easel Blue (the interactive token). A single shade reads well on
+# both the light and dark map backdrop, matching how the CSS uses it.
+_PIN = _rgba(0x55 / 255, 0x65 / 255, 0xBF / 255, 1.0)
+_WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
+
+
+class MapView(Gtk.Widget):
+    """An offline world map that pins photos by where they were taken.
+
+    Easel is offline-first and the sandbox can't reach map-tile servers, so the
+    map is drawn from a tiny built-in land mask (see worldmap.py) as a calm grid
+    of dots — no tiles, no network, no extra dependency. Photos are projected
+    equirectangularly and clustered so nearby shots share one pin; clicking a
+    pin opens those photos.
+
+    Everything is painted with GSK primitives (filled + rounded-clipped rects
+    and a text layout) in do_snapshot — the drawing path that reliably paints in
+    this runtime — so there are no render-to-texture surprises."""
+
+    __gtype_name__ = "EaselMapView"
+
+    _PAD = 12.0          # inset of the map from the widget edge
+    _DOT_TARGET = 118    # ~how many land-dot columns to draw across the map
+    _CLUSTER_CELL = 46.0  # px grid that merges nearby pins into one
+
+    def __init__(self):
+        super().__init__()
+        self._entries = []          # [(lon, lat, photo), …]
+        self._clusters = []         # cached clusters for the current size
+        self._dots = []             # cached land-dot pixel centres
+        self._dot_r = 2.0           # land-dot radius for the current size
+        self._cache_key = None      # (w, h, id(entries)) the caches were built for
+        self._hover = -1
+        self._activate_cb = None
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+
+        click = Gtk.GestureClick(button=1)
+        click.connect("released", self._on_click)
+        self.add_controller(click)
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        motion.connect("leave", lambda *_a: self._set_hover(-1))
+        self.add_controller(motion)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_photos(self, entries):
+        """entries: an iterable of (lon, lat, photo) — photo is opaque to the
+        map and handed back to the activate callback on click."""
+        self._entries = list(entries)
+        self._cache_key = None
+        self.queue_draw()
+
+    def set_activate_cb(self, cb):
+        """cb(list_of_photos) is called when a pin is clicked."""
+        self._activate_cb = cb
+
+    # ---- geometry ----
+
+    def _map_geom(self):
+        """The equirectangular (2:1) map rectangle inside the widget:
+        (map_w, map_h, origin_x, origin_y)."""
+        w, h = self.get_width(), self.get_height()
+        aw, ah = max(0.0, w - 2 * self._PAD), max(0.0, h - 2 * self._PAD)
+        mw = min(aw, ah * 2.0)
+        mh = mw / 2.0
+        if mh > ah:
+            mh = ah
+            mw = mh * 2.0
+        ox = (w - mw) / 2.0
+        oy = (h - mh) / 2.0
+        return mw, mh, ox, oy
+
+    def _project(self, lon, lat, geom):
+        mw, mh, ox, oy = geom
+        px = ox + (lon + 180.0) / 360.0 * mw
+        py = oy + (90.0 - lat) / 180.0 * mh
+        return px, py
+
+    def _ensure_clusters(self):
+        """Recompute the land dots and photo pins for the current size. Both are
+        size-dependent, so they're cached and only rebuilt when the widget size
+        or the photo set changes — never on a mere hover repaint, which would
+        otherwise re-sample the land mask thousands of times."""
+        key = (self.get_width(), self.get_height(), id(self._entries), len(self._entries))
+        if key == self._cache_key:
+            return
+        self._cache_key = key
+        geom = self._map_geom()
+        self._dots = self._compute_dots(geom)
+        clusters = []
+        if geom[0] > 0 and self._entries:
+            cell = self._CLUSTER_CELL
+            buckets = {}
+            for lon, lat, photo in self._entries:
+                px, py = self._project(lon, lat, geom)
+                bkey = (int(px // cell), int(py // cell))
+                buckets.setdefault(bkey, []).append((px, py, photo))
+            for members in buckets.values():
+                cx = sum(m[0] for m in members) / len(members)
+                cy = sum(m[1] for m in members) / len(members)
+                clusters.append({
+                    "x": cx, "y": cy, "n": len(members),
+                    "photos": [m[2] for m in members],
+                })
+            # Bigger pins draw last so they sit on top of smaller neighbours.
+            clusters.sort(key=lambda c: c["n"])
+        self._clusters = clusters
+
+    def _compute_dots(self, geom):
+        """Pixel centres of the land dots, sampled on a regular screen grid so
+        they stay evenly spaced instead of bunching up towards the poles."""
+        mw, mh, ox, oy = geom
+        if mw <= 0 or mh <= 0:
+            return []
+        step = max(4.0, mw / self._DOT_TARGET)
+        dots = []
+        sy = oy + step / 2.0
+        while sy < oy + mh:
+            lat = 90.0 - (sy - oy) / mh * 180.0
+            sx = ox + step / 2.0
+            while sx < ox + mw:
+                lon = (sx - ox) / mw * 360.0 - 180.0
+                if worldmap.is_land(lon, lat):
+                    dots.append((sx, sy))
+                sx += step
+            sy += step
+        self._dot_r = step * 0.30
+        return dots
+
+    @staticmethod
+    def _pin_radius(n):
+        return 8.0 + min(9.0, 2.4 * math.log2(n + 1))
+
+    # ---- interaction ----
+
+    def _hit(self, x, y):
+        self._ensure_clusters()
+        best = -1
+        for i, c in enumerate(self._clusters):
+            r = self._pin_radius(c["n"]) + 4.0
+            if (x - c["x"]) ** 2 + (y - c["y"]) ** 2 <= r * r:
+                best = i  # later (larger) pins win ties — they're drawn on top
+        return best
+
+    def _on_click(self, _gesture, _n, x, y):
+        i = self._hit(x, y)
+        if i >= 0 and self._activate_cb is not None:
+            self._activate_cb(self._clusters[i]["photos"])
+
+    def _on_motion(self, _ctrl, x, y):
+        self._set_hover(self._hit(x, y))
+
+    def _set_hover(self, i):
+        if i == self._hover:
+            return
+        self._hover = i
+        self.set_cursor(POINTER_CURSOR if i >= 0 else None)
+        self.queue_draw()
+
+    # ---- painting ----
+
+    @staticmethod
+    def _circle(snapshot, cx, cy, r, rgba):
+        rect = Graphene.Rect().init(cx - r, cy - r, 2 * r, 2 * r)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(rect, r)
+        snapshot.push_rounded_clip(rounded)
+        snapshot.append_color(rgba, rect)
+        snapshot.pop()
+
+    def do_snapshot(self, snapshot):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return
+        geom = self._map_geom()
+        mw, mh, ox, oy = geom
+        if mw <= 0 or mh <= 0:
+            return
+
+        self._ensure_clusters()  # rebuilds dots + pins only when size/photos change
+
+        fg = self.get_color()  # foreground colour → tracks light/dark theme
+        sea = _rgba(fg.red, fg.green, fg.blue, 0.035)
+        land = _rgba(fg.red, fg.green, fg.blue, 0.22)
+
+        # Sea: a faint rounded panel behind the continents.
+        sea_rect = Graphene.Rect().init(ox, oy, mw, mh)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(sea_rect, 12.0)
+        snapshot.push_rounded_clip(rounded)
+        snapshot.append_color(sea, sea_rect)
+
+        # Land: pre-computed dots, evenly spaced on the screen grid.
+        dot = self._dot_r
+        for sx, sy in self._dots:
+            self._circle(snapshot, sx, sy, dot, land)
+        snapshot.pop()  # sea clip
+
+        # Pins.
+        for i, c in enumerate(self._clusters):
+            r = self._pin_radius(c["n"])
+            if i == self._hover:
+                r += 2.0
+            cx, cy = c["x"], c["y"]
+            self._circle(snapshot, cx, cy, r + 2.0, _WHITE)  # ring
+            self._circle(snapshot, cx, cy, r, _PIN)          # disc
+            if c["n"] > 1:
+                self._draw_count(snapshot, cx, cy, r, c["n"])
+            else:
+                self._circle(snapshot, cx, cy, r * 0.34, _WHITE)  # centre dot
+
+    def _draw_count(self, snapshot, cx, cy, r, n):
+        label = str(n) if n < 1000 else "999+"
+        layout = self.create_pango_layout(label)
+        try:
+            ink, logical = layout.get_pixel_extents()
+            tw, th = logical.width, logical.height
+        except Exception:
+            tw, th = r, r
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(cx - tw / 2.0, cy - th / 2.0))
+        snapshot.append_layout(layout, _WHITE)
+        snapshot.restore()
+
+
+class FacePinLayer(Gtk.Widget):
+    """A transparent overlay drawn on top of the info-panel photo preview. It
+    shows a small pin for each person tagged in the photo, and turns a click on
+    the photo into a normalised (x, y) so the user can drop a new tag exactly
+    where that person is ("pin and type a name").
+
+    Like CropOverlay it's an overlay child that paints its own content in
+    do_snapshot — the drawing path that reliably paints in this runtime."""
+
+    __gtype_name__ = "EaselFacePinLayer"
+
+    def __init__(self):
+        super().__init__()
+        self._faces = []       # [(x, y), …] normalised pin positions
+        self._place_cb = None
+        self.set_cursor(POINTER_CURSOR)
+        click = Gtk.GestureClick(button=1)
+        click.connect("released", self._on_click)
+        self.add_controller(click)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_faces(self, faces):
+        """faces: iterable of (x, y) normalised pin positions."""
+        self._faces = [(float(x), float(y)) for x, y in faces]
+        self.queue_draw()
+
+    def set_place_cb(self, cb):
+        """cb(nx, ny, px, py) fires when the photo is clicked: nx/ny are
+        normalised, px/py are widget pixels (to anchor a popover)."""
+        self._place_cb = cb
+
+    def _on_click(self, _gesture, _n, x, y):
+        w, h = self.get_width(), self.get_height()
+        if w > 0 and h > 0 and self._place_cb is not None:
+            self._place_cb(x / w, y / h, x, y)
+
+    def do_snapshot(self, snapshot):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return
+        for nx, ny in self._faces:
+            cx, cy = nx * w, ny * h
+            r = 6.0
+            MapView._circle(snapshot, cx, cy, r + 2.0, _WHITE)
+            MapView._circle(snapshot, cx, cy, r, _PIN)
