@@ -929,11 +929,12 @@ _WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
 class MapView(Gtk.Widget):
     """An offline world map that pins photos by where they were taken.
 
-    Easel is offline-first and the sandbox can't reach map-tile servers, so the
-    map is drawn from a tiny built-in land mask (see worldmap.py) as a calm grid
-    of dots — no tiles, no network, no extra dependency. Photos are projected
-    equirectangularly and clustered so nearby shots share one pin; clicking a
-    pin opens those photos.
+    This is the *fallback* Map view, used when the real OpenStreetMap
+    (shumate_map.ShumateMap) can't be built — e.g. libshumate missing or no
+    network. It needs nothing: the map is drawn from a tiny built-in land mask
+    (see worldmap.py) as a calm grid of dots — no tiles, no network, no extra
+    dependency. Photos are projected equirectangularly and clustered so nearby
+    shots share one pin; clicking a pin opens those photos.
 
     Everything is painted with GSK primitives (filled + rounded-clipped rects
     and a text layout) in do_snapshot — the drawing path that reliably paints in
@@ -1159,21 +1160,26 @@ class FacePinLayer(Gtk.Widget):
 
     __gtype_name__ = "EaselFacePinLayer"
 
+    _DOT_R = 6.0
+
     def __init__(self):
         super().__init__()
-        self._faces = []       # [(x, y), …] normalised pin positions
+        self._faces = []       # [(name, x, y), …] normalised pin positions
         self._place_cb = None
         self.set_cursor(POINTER_CURSOR)
         click = Gtk.GestureClick(button=1)
         click.connect("released", self._on_click)
         self.add_controller(click)
+        # Hovering a pin names the person it marks.
+        self.set_has_tooltip(True)
+        self.connect("query-tooltip", self._on_query_tooltip)
 
     def do_measure(self, orientation, for_size):
         return (0, 0, -1, -1)
 
     def set_faces(self, faces):
-        """faces: iterable of (x, y) normalised pin positions."""
-        self._faces = [(float(x), float(y)) for x, y in faces]
+        """faces: iterable of (name, x, y) — name labels the pin on hover."""
+        self._faces = [(str(name), float(x), float(y)) for name, x, y in faces]
         self.queue_draw()
 
     def set_place_cb(self, cb):
@@ -1186,12 +1192,24 @@ class FacePinLayer(Gtk.Widget):
         if w > 0 and h > 0 and self._place_cb is not None:
             self._place_cb(x / w, y / h, x, y)
 
+    def _on_query_tooltip(self, _widget, x, y, _keyboard, tooltip):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return False
+        hit = self._DOT_R + 3.0
+        for name, nx, ny in self._faces:
+            cx, cy = nx * w, ny * h
+            if (x - cx) ** 2 + (y - cy) ** 2 <= hit * hit:
+                tooltip.set_text(name)
+                return True
+        return False
+
     def do_snapshot(self, snapshot):
         w, h = self.get_width(), self.get_height()
         if w <= 0 or h <= 0:
             return
-        for nx, ny in self._faces:
+        r = self._DOT_R
+        for _name, nx, ny in self._faces:
             cx, cy = nx * w, ny * h
-            r = 6.0
             MapView._circle(snapshot, cx, cy, r + 2.0, _WHITE)
             MapView._circle(snapshot, cx, cy, r, _PIN)

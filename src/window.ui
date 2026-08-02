@@ -187,17 +187,8 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="tab_albums">
-                            <property name="label" translatable="yes">Albums</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_favourites">
-                            <property name="label" translatable="yes">Favourites</property>
+                          <object class="GtkButton" id="tab_people">
+                            <property name="label" translatable="yes">People</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -214,8 +205,25 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="tab_people">
-                            <property name="label" translatable="yes">People</property>
+                          <object class="GtkLabel">
+                            <property name="label">|</property>
+                            <style>
+                              <class name="tab-sep"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_albums">
+                            <property name="label" translatable="yes">Albums</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_favourites">
+                            <property name="label" translatable="yes">Favourites</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -333,12 +341,11 @@
                         <property name="name">empty</property>
                         <property name="child">
                           <object class="AdwStatusPage">
-                            <property name="icon-name">image-x-generic-symbolic</property>
-                            <property name="title" translatable="yes">No Photos Yet</property>
-                            <property name="description" translatable="yes">Add a folder and Easel will scan it for photos.</property>
+                            <property name="title" translatable="yes">No photos yet</property>
+                            <property name="description" translatable="yes">Add a folder and Easel will scan it for photos</property>
                             <property name="child">
                               <object class="GtkButton">
-                                <property name="label" translatable="yes">Add Photo Folder…</property>
+                                <property name="label" translatable="yes">Select folder</property>
                                 <property name="halign">center</property>
                                 <property name="action-name">win.add-folder</property>
                                 <style>
@@ -517,6 +524,7 @@
                                     <property name="orientation">vertical</property>
                                     <property name="hexpand">true</property>
                                     <property name="vexpand">true</property>
+                                    <property name="overflow">hidden</property>
                                     <property name="margin-top">24</property>
                                     <property name="margin-bottom">24</property>
                                     <property name="margin-start">24</property>

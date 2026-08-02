@@ -59,7 +59,7 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites", "map", "people")
+VIEW_NAMES = ("all_photos", "months", "years", "people", "map", "albums", "favourites")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -519,9 +519,21 @@ class EaselWindow(Adw.ApplicationWindow):
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
     def _setup_map(self):
-        self._map_view = MapView()
-        self._map_view.set_activate_cb(self._on_map_pin)
-        self.map_slot.append(self._map_view)
+        # Prefer a real, zoomable OpenStreetMap (libshumate, which ships in the
+        # GNOME runtime and needs network for tiles). If it's unavailable or
+        # fails to build for any reason, fall back to the self-contained offline
+        # map so the Map view always works.
+        widget = None
+        try:
+            from .shumate_map import ShumateMap
+            widget = ShumateMap()
+        except Exception as exc:  # ImportError, or any Shumate build failure
+            print(f"[easel] real map unavailable ({exc}); using offline map",
+                  file=sys.stderr)
+            widget = MapView()
+        widget.set_activate_cb(self._on_map_pin)
+        self._map_view = widget
+        self.map_slot.append(widget)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -1140,7 +1152,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._clear_box(self.info_rows_box)
         # People tagged in this photo, with their pins shown on the preview.
         faces = lib.faces_for_photo(self.con, photo_id)
-        self._face_layer.set_faces([(f["x"], f["y"]) for f in faces])
+        self._face_layer.set_faces([(f["name"], f["x"], f["y"]) for f in faces])
         self.info_rows_box.append(self._people_section(photo_id, faces))
         self.info_rows_box.append(self._info_divider())
         dims = _dimensions(row["path"])
@@ -1273,51 +1285,36 @@ class EaselWindow(Adw.ApplicationWindow):
     # ---------- people tagging (info panel) ----------
 
     def _people_section(self, photo_id, faces):
-        """The 'In this photo' block: a removable chip per tagged person, plus
-        an Add button. The photo preview above is also click-to-tag."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        """The 'In this photo' block: one name per line in the panel's own text
+        style. A name underlines and colours on hover and removes on click; an
+        'Add name' line opens the entry. Clicking the photo above tags a pin."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.append(Gtk.Label(label="In this photo", xalign=0,
                              css_classes=["info-key"]))
-        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
-                           column_spacing=6, row_spacing=6, hexpand=True,
-                           max_children_per_line=6, css_classes=["people-chips"])
         for f in faces:
-            flow.append(self._person_chip(photo_id, f["person_id"], f["name"]))
-        add_btn = Gtk.Button(css_classes=["flat", "person-add-chip"])
-        add_btn.set_child(Gtk.Label(label="Add name"))
-        add_btn.set_cursor(POINTER_CURSOR)
-        add_btn.connect(
-            "clicked", lambda b: self._add_person_popover(photo_id, b, 0.5, 0.5))
-        flow.append(add_btn)
-        box.append(flow)
+            box.append(self._person_line(photo_id, f["person_id"], f["name"]))
+        add = Gtk.Label(label="Add name", xalign=0, css_classes=["person-add"])
+        add.set_cursor(POINTER_CURSOR)
+        gesture = Gtk.GestureClick(button=1)
+        gesture.connect(
+            "released", lambda *_a: self._add_person_popover(photo_id, add, 0.5, 0.5))
+        add.add_controller(gesture)
+        box.append(add)
         if not faces:
             box.append(Gtk.Label(
                 label="Tip: click the photo above to pin a name where someone is.",
                 xalign=0, wrap=True, css_classes=["mono-dim-sm"]))
         return box
 
-    def _person_chip(self, photo_id, person_id, name):
-        chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2,
-                       css_classes=["person-chip"])
-        label = Gtk.Label(label=name, css_classes=["person-chip-name"],
-                          ellipsize=Pango.EllipsizeMode.END)
+    def _person_line(self, photo_id, person_id, name):
+        label = Gtk.Label(label=name, xalign=0, css_classes=["person-name"],
+                          ellipsize=Pango.EllipsizeMode.END,
+                          tooltip_text="Click to remove")
         label.set_cursor(POINTER_CURSOR)
         gesture = Gtk.GestureClick(button=1)
-        gesture.connect("released", lambda *_a: self._open_person_from_info(person_id))
+        gesture.connect("released", lambda *_a: self._untag_person(photo_id, person_id))
         label.add_controller(gesture)
-        remove = Gtk.Button(icon_name="easel-x-symbolic",
-                            css_classes=["flat", "person-chip-x"],
-                            tooltip_text="Remove tag")
-        remove.set_cursor(POINTER_CURSOR)
-        remove.connect("clicked", lambda *_a: self._untag_person(photo_id, person_id))
-        chip.append(label)
-        chip.append(remove)
-        return chip
-
-    def _open_person_from_info(self, person_id):
-        if lib.get_person(self.con, person_id):
-            self._select_tab("people")
-            self._open_person(person_id)
+        return label
 
     def _untag_person(self, photo_id, person_id):
         lib.remove_face(self.con, photo_id, person_id)
@@ -2361,7 +2358,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box = item.get_child()
         if not hasattr(box, "swatch"):
             box = self._album_card_widget()
-            box.swatch.add_css_class("avatar")
+            box.swatch.add_css_class("person-swatch")
             item.set_child(box)
         box.swatch.set_placeholder("person")
         box.swatch.set_path(person.cover_path or None)
