@@ -10,7 +10,6 @@
         "--socket=wayland",
         "--socket=pulseaudio",
         "--device=dri",
-        "--share=network",
         "--filesystem=home:ro",
         "--filesystem=xdg-pictures:ro",
         "--filesystem=host-os:ro",

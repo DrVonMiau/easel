@@ -519,21 +519,9 @@ class EaselWindow(Adw.ApplicationWindow):
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
     def _setup_map(self):
-        # Prefer a real, zoomable OpenStreetMap (libshumate, which ships in the
-        # GNOME runtime and needs network for tiles). If it's unavailable or
-        # fails to build for any reason, fall back to the self-contained offline
-        # map so the Map view always works.
-        widget = None
-        try:
-            from .shumate_map import ShumateMap
-            widget = ShumateMap()
-        except Exception as exc:  # ImportError, or any Shumate build failure
-            print(f"[easel] real map unavailable ({exc}); using offline map",
-                  file=sys.stderr)
-            widget = MapView()
-        widget.set_activate_cb(self._on_map_pin)
-        self._map_view = widget
-        self.map_slot.append(widget)
+        self._map_view = MapView()
+        self._map_view.set_activate_cb(self._on_map_pin)
+        self.map_slot.append(self._map_view)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -1285,36 +1273,70 @@ class EaselWindow(Adw.ApplicationWindow):
     # ---------- people tagging (info panel) ----------
 
     def _people_section(self, photo_id, faces):
-        """The 'In this photo' block: one name per line in the panel's own text
-        style. A name underlines and colours on hover and removes on click; an
-        'Add name' line opens the entry. Clicking the photo above tags a pin."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.append(Gtk.Label(label="In this photo", xalign=0,
-                             css_classes=["info-key"]))
-        for f in faces:
-            box.append(self._person_line(photo_id, f["person_id"], f["name"]))
-        add = Gtk.Label(label="Add name", xalign=0, css_classes=["person-add"])
-        add.set_cursor(POINTER_CURSOR)
-        gesture = Gtk.GestureClick(button=1)
-        gesture.connect(
-            "released", lambda *_a: self._add_person_popover(photo_id, add, 0.5, 0.5))
-        add.add_controller(gesture)
-        box.append(add)
-        if not faces:
-            box.append(Gtk.Label(
-                label="Tip: click the photo above to pin a name where someone is.",
-                xalign=0, wrap=True, css_classes=["mono-dim-sm"]))
-        return box
+        """The 'In this photo' info row: 'In this photo' key on the left, the
+        tagged names as a comma-separated, right-aligned value. A name opens
+        that person's photos on click; right-click offers to remove the tag.
+        Clicking the photo above tags a new person at a pin."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.append(Gtk.Label(label="In this photo", xalign=0,
+                             valign=Gtk.Align.START, css_classes=["info-key"]))
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, hexpand=True,
+                           halign=Gtk.Align.END, min_children_per_line=1,
+                           max_children_per_line=1000, column_spacing=4,
+                           row_spacing=2, css_classes=["people-value"])
+        flow.set_activate_on_single_click(False)
+        if faces:
+            last = len(faces) - 1
+            for i, f in enumerate(faces):
+                text = f["name"] + ("," if i < last else "")
+                flow.insert(self._person_name_label(photo_id, f["person_id"], text), -1)
+        else:
+            flow.insert(self._add_name_label(photo_id), -1)
+        row.append(flow)
+        return row
 
-    def _person_line(self, photo_id, person_id, name):
-        label = Gtk.Label(label=name, xalign=0, css_classes=["person-name"],
-                          ellipsize=Pango.EllipsizeMode.END,
-                          tooltip_text="Click to remove")
+    def _person_name_label(self, photo_id, person_id, text):
+        label = Gtk.Label(label=text, css_classes=["person-name"],
+                          ellipsize=Pango.EllipsizeMode.END)
+        label.set_cursor(POINTER_CURSOR)
+        left = Gtk.GestureClick(button=1)
+        left.connect("released", lambda *_a: self._open_person_nav(person_id))
+        label.add_controller(left)
+        right = Gtk.GestureClick(button=3)
+        right.connect("pressed", lambda _g, _n, x, y:
+                      self._person_remove_menu(label, photo_id, person_id, x, y))
+        label.add_controller(right)
+        return label
+
+    def _add_name_label(self, photo_id):
+        label = Gtk.Label(label="Add name", css_classes=["person-add"])
         label.set_cursor(POINTER_CURSOR)
         gesture = Gtk.GestureClick(button=1)
-        gesture.connect("released", lambda *_a: self._untag_person(photo_id, person_id))
+        gesture.connect(
+            "released", lambda *_a: self._add_person_popover(photo_id, label, 0.5, 0.5))
         label.add_controller(gesture)
         return label
+
+    def _open_person_nav(self, person_id):
+        if lib.get_person(self.con, person_id):
+            self._select_tab("people")
+            self._open_person(person_id)
+
+    def _person_remove_menu(self, anchor, photo_id, person_id, x, y):
+        popover = Gtk.Popover(has_arrow=True, css_classes=["person-popover"])
+        popover.set_parent(anchor)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        btn = Gtk.Button(label="Remove from photo", css_classes=["flat", "menu-item"])
+        btn.set_cursor(POINTER_CURSOR)
+
+        def do_remove(*_a):
+            popover.popdown()
+            self._untag_person(photo_id, person_id)
+
+        btn.connect("clicked", do_remove)
+        popover.set_child(btn)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+        popover.popup()
 
     def _untag_person(self, photo_id, person_id):
         lib.remove_face(self.con, photo_id, person_id)

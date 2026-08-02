@@ -34,7 +34,6 @@ easel_sources = [
   'models.py',
   'widgets.py',
   'worldmap.py',
-  'shumate_map.py',
 ]
 
 install_data(easel_sources, install_dir: moduledir)

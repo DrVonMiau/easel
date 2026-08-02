@@ -927,34 +927,39 @@ _WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
 
 
 class MapView(Gtk.Widget):
-    """An offline world map that pins photos by where they were taken.
+    """An offline, zoomable vector world map that pins photos by location.
 
-    This is the *fallback* Map view, used when the real OpenStreetMap
-    (shumate_map.ShumateMap) can't be built — e.g. libshumate missing or no
-    network. It needs nothing: the map is drawn from a tiny built-in land mask
-    (see worldmap.py) as a calm grid of dots — no tiles, no network, no extra
-    dependency. Photos are projected equirectangularly and clustered so nearby
-    shots share one pin; clicking a pin opens those photos.
+    Easel is offline-first, so the map is drawn from a tiny built-in set of
+    coastline polygons (worldmap.py) — no tiles, no network, no dependency, and
+    crisp at any zoom because it's vector. Scroll or pinch to zoom, drag to pan.
+    Photos are projected equirectangularly and clustered by screen distance, so
+    nearby shots share one pin and separate as you zoom in; clicking a pin opens
+    all of its photos.
 
-    Everything is painted with GSK primitives (filled + rounded-clipped rects
-    and a text layout) in do_snapshot — the drawing path that reliably paints in
-    this runtime — so there are no render-to-texture surprises."""
+    Everything is painted with GSK nodes in do_snapshot — filled/stroked paths
+    for land, rounded-clip circles and a text layout for pins — the drawing path
+    that paints reliably in this runtime, so there are no render-to-texture
+    surprises."""
 
     __gtype_name__ = "EaselMapView"
 
-    _PAD = 12.0          # inset of the map from the widget edge
-    _DOT_TARGET = 118    # ~how many land-dot columns to draw across the map
-    _CLUSTER_CELL = 46.0  # px grid that merges nearby pins into one
+    _CLUSTER_CELL = 44.0   # px grid that merges nearby pins into one
+    _MIN_ZOOM = 1.0
+    _MAX_ZOOM = 48.0
 
     def __init__(self):
         super().__init__()
         self._entries = []          # [(lon, lat, photo), …]
-        self._clusters = []         # cached clusters for the current size
-        self._dots = []             # cached land-dot pixel centres
-        self._dot_r = 2.0           # land-dot radius for the current size
-        self._cache_key = None      # (w, h, id(entries)) the caches were built for
+        self._clusters = []         # cached clusters for the current view
+        self._cache_key = None
         self._hover = -1
+        self._pointer = None
         self._activate_cb = None
+        self._zoom = 1.0
+        self._cx = 0.5              # normalised viewport centre across longitude
+        self._cy = 0.5              # normalised viewport centre across latitude
+        self._drag_origin = None
+        self._zoom_start = 1.0
         self.set_hexpand(True)
         self.set_vexpand(True)
 
@@ -963,8 +968,20 @@ class MapView(Gtk.Widget):
         self.add_controller(click)
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self._on_motion)
-        motion.connect("leave", lambda *_a: self._set_hover(-1))
+        motion.connect("leave", self._on_leave)
         self.add_controller(motion)
+        scroll = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL)
+        scroll.connect("scroll", self._on_scroll)
+        self.add_controller(scroll)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        self.add_controller(drag)
+        zoom = Gtk.GestureZoom()
+        zoom.connect("begin", self._on_zoom_begin)
+        zoom.connect("scale-changed", self._on_zoom_scale)
+        self.add_controller(zoom)
 
     def do_measure(self, orientation, for_size):
         return (0, 0, -1, -1)
@@ -980,45 +997,94 @@ class MapView(Gtk.Widget):
         """cb(list_of_photos) is called when a pin is clicked."""
         self._activate_cb = cb
 
-    # ---- geometry ----
+    # ---- projection ----
 
-    def _map_geom(self):
-        """The equirectangular (2:1) map rectangle inside the widget:
-        (map_w, map_h, origin_x, origin_y)."""
+    def _base_w(self):
+        """World width in px at zoom 1: the whole world, contained 2:1."""
         w, h = self.get_width(), self.get_height()
-        aw, ah = max(0.0, w - 2 * self._PAD), max(0.0, h - 2 * self._PAD)
-        mw = min(aw, ah * 2.0)
-        mh = mw / 2.0
-        if mh > ah:
-            mh = ah
-            mw = mh * 2.0
-        ox = (w - mw) / 2.0
-        oy = (h - mh) / 2.0
-        return mw, mh, ox, oy
+        return max(1.0, min(float(w), 2.0 * float(h)))
 
-    def _project(self, lon, lat, geom):
-        mw, mh, ox, oy = geom
-        px = ox + (lon + 180.0) / 360.0 * mw
-        py = oy + (90.0 - lat) / 180.0 * mh
-        return px, py
+    def _world_size(self):
+        ww = self._base_w() * self._zoom
+        return ww, ww / 2.0
+
+    def _project(self, lon, lat):
+        w, h = self.get_width(), self.get_height()
+        ww, wh = self._world_size()
+        u = (lon + 180.0) / 360.0
+        v = (90.0 - lat) / 180.0
+        return w / 2.0 + (u - self._cx) * ww, h / 2.0 + (v - self._cy) * wh
+
+    # ---- zoom / pan ----
+
+    def _clamp(self):
+        self._zoom = max(self._MIN_ZOOM, min(self._MAX_ZOOM, self._zoom))
+        self._cx = min(1.0, max(0.0, self._cx))
+        self._cy = min(1.0, max(0.0, self._cy))
+
+    def _zoom_at(self, factor, px, py):
+        """Zoom by `factor`, keeping the world point under (px, py) fixed."""
+        w, h = self.get_width(), self.get_height()
+        ww, wh = self._world_size()
+        u = self._cx + (px - w / 2.0) / ww
+        v = self._cy + (py - h / 2.0) / wh
+        self._zoom *= factor
+        self._clamp()
+        ww, wh = self._world_size()
+        self._cx = u - (px - w / 2.0) / ww
+        self._cy = v - (py - h / 2.0) / wh
+        self._clamp()
+        self._cache_key = None
+        self.queue_draw()
+
+    def _on_scroll(self, _ctrl, _dx, dy):
+        factor = (1.0 / 1.2) if dy > 0 else 1.2   # scroll up zooms in
+        px, py = self._pointer or (self.get_width() / 2.0, self.get_height() / 2.0)
+        self._zoom_at(factor, px, py)
+        return True
+
+    def _on_drag_begin(self, _g, _x, _y):
+        self._drag_origin = (self._cx, self._cy)
+
+    def _on_drag_update(self, _g, ox, oy):
+        if self._drag_origin is None:
+            return
+        ww, wh = self._world_size()
+        self._cx = self._drag_origin[0] - ox / ww
+        self._cy = self._drag_origin[1] - oy / wh
+        self._clamp()
+        self._cache_key = None
+        self.queue_draw()
+
+    def _on_zoom_begin(self, _g, _seq):
+        self._zoom_start = self._zoom
+
+    def _on_zoom_scale(self, gesture, scale):
+        ok, x, y = gesture.get_bounding_box_center()
+        px, py = (x, y) if ok else (self.get_width() / 2.0, self.get_height() / 2.0)
+        target = self._zoom_start * scale
+        if self._zoom > 0:
+            self._zoom_at(target / self._zoom, px, py)
+
+    # ---- clustering ----
 
     def _ensure_clusters(self):
-        """Recompute the land dots and photo pins for the current size. Both are
-        size-dependent, so they're cached and only rebuilt when the widget size
-        or the photo set changes — never on a mere hover repaint, which would
-        otherwise re-sample the land mask thousands of times."""
-        key = (self.get_width(), self.get_height(), id(self._entries), len(self._entries))
+        """Group photos into pins by screen distance for the current view.
+        Depends on zoom and centre, so photos re-cluster as you zoom — nearby
+        shots merge when zoomed out and separate as you zoom in."""
+        key = (self.get_width(), self.get_height(), round(self._zoom, 4),
+               round(self._cx, 5), round(self._cy, 5),
+               id(self._entries), len(self._entries))
         if key == self._cache_key:
             return
         self._cache_key = key
-        geom = self._map_geom()
-        self._dots = self._compute_dots(geom)
         clusters = []
-        if geom[0] > 0 and self._entries:
+        w, h = self.get_width(), self.get_height()
+        if w > 0 and h > 0 and self._entries:
             cell = self._CLUSTER_CELL
             buckets = {}
             for lon, lat, photo in self._entries:
-                px, py = self._project(lon, lat, geom)
+                px, py = self._project(lon, lat)
                 bkey = (int(px // cell), int(py // cell))
                 buckets.setdefault(bkey, []).append((px, py, photo))
             for members in buckets.values():
@@ -1028,30 +1094,8 @@ class MapView(Gtk.Widget):
                     "x": cx, "y": cy, "n": len(members),
                     "photos": [m[2] for m in members],
                 })
-            # Bigger pins draw last so they sit on top of smaller neighbours.
-            clusters.sort(key=lambda c: c["n"])
+            clusters.sort(key=lambda c: c["n"])  # bigger pins drawn on top
         self._clusters = clusters
-
-    def _compute_dots(self, geom):
-        """Pixel centres of the land dots, sampled on a regular screen grid so
-        they stay evenly spaced instead of bunching up towards the poles."""
-        mw, mh, ox, oy = geom
-        if mw <= 0 or mh <= 0:
-            return []
-        step = max(4.0, mw / self._DOT_TARGET)
-        dots = []
-        sy = oy + step / 2.0
-        while sy < oy + mh:
-            lat = 90.0 - (sy - oy) / mh * 180.0
-            sx = ox + step / 2.0
-            while sx < ox + mw:
-                lon = (sx - ox) / mw * 360.0 - 180.0
-                if worldmap.is_land(lon, lat):
-                    dots.append((sx, sy))
-                sx += step
-            sy += step
-        self._dot_r = step * 0.30
-        return dots
 
     @staticmethod
     def _pin_radius(n):
@@ -1074,7 +1118,12 @@ class MapView(Gtk.Widget):
             self._activate_cb(self._clusters[i]["photos"])
 
     def _on_motion(self, _ctrl, x, y):
+        self._pointer = (x, y)
         self._set_hover(self._hit(x, y))
+
+    def _on_leave(self, *_a):
+        self._pointer = None
+        self._set_hover(-1)
 
     def _set_hover(self, i):
         if i == self._hover:
@@ -1098,36 +1147,43 @@ class MapView(Gtk.Widget):
         w, h = self.get_width(), self.get_height()
         if w <= 0 or h <= 0:
             return
-        geom = self._map_geom()
-        mw, mh, ox, oy = geom
-        if mw <= 0 or mh <= 0:
-            return
-
-        self._ensure_clusters()  # rebuilds dots + pins only when size/photos change
 
         fg = self.get_color()  # foreground colour → tracks light/dark theme
-        sea = _rgba(fg.red, fg.green, fg.blue, 0.035)
-        land = _rgba(fg.red, fg.green, fg.blue, 0.22)
+        sea = _rgba(fg.red, fg.green, fg.blue, 0.04)
+        land = _rgba(fg.red, fg.green, fg.blue, 0.14)
+        coast = _rgba(fg.red, fg.green, fg.blue, 0.32)
 
-        # Sea: a faint rounded panel behind the continents.
-        sea_rect = Graphene.Rect().init(ox, oy, mw, mh)
-        rounded = Gsk.RoundedRect()
-        rounded.init_from_rect(sea_rect, 12.0)
-        snapshot.push_rounded_clip(rounded)
-        snapshot.append_color(sea, sea_rect)
+        bounds = Graphene.Rect().init(0, 0, w, h)
+        snapshot.push_clip(bounds)
+        snapshot.append_color(sea, bounds)
 
-        # Land: pre-computed dots, evenly spaced on the screen grid.
-        dot = self._dot_r
-        for sx, sy in self._dots:
-            self._circle(snapshot, sx, sy, dot, land)
-        snapshot.pop()  # sea clip
+        # Land: filled vector coastline polygons (crisp at any zoom). Even-odd
+        # so island/lake rings punch holes correctly.
+        builder = Gsk.PathBuilder()
+        for ring in worldmap.land_rings():
+            first = True
+            for lon, lat in ring:
+                x, y = self._project(lon, lat)
+                if first:
+                    builder.move_to(x, y)
+                    first = False
+                else:
+                    builder.line_to(x, y)
+            builder.close()
+        path = builder.to_path()
+        snapshot.append_fill(path, Gsk.FillRule.EVEN_ODD, land)
+        snapshot.append_stroke(path, Gsk.Stroke.new(1.0), coast)
+        snapshot.pop()  # bounds clip
 
         # Pins.
+        self._ensure_clusters()
         for i, c in enumerate(self._clusters):
+            cx, cy = c["x"], c["y"]
+            if cx < -40 or cx > w + 40 or cy < -40 or cy > h + 40:
+                continue  # skip pins panned off-screen
             r = self._pin_radius(c["n"])
             if i == self._hover:
                 r += 2.0
-            cx, cy = c["x"], c["y"]
             self._circle(snapshot, cx, cy, r + 2.0, _WHITE)  # ring
             self._circle(snapshot, cx, cy, r, _PIN)          # disc
             if c["n"] > 1:

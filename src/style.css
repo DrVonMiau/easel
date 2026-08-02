@@ -751,35 +751,11 @@ window.dark .editor-scale slider {
    ============================================================================ */
 
 /* The Map view fills the paper with a soft rounded panel. Overflow is hidden
-   so the map (real OSM tiles, or the offline dotted map) is clipped to the
-   rounded corners. */
+   so the vector map is clipped to the rounded corners. The world and its pins
+   are drawn by EaselMapView in do_snapshot. */
 .map-slot {
   background-color: alpha(@window_fg_color, 0.03);
   border-radius: 16px;               /* radius token: card = 16 */
-}
-
-/* Photo pins on the real (libshumate) map — an accent disc with a white ring;
-   a count when a spot holds several photos. */
-.map-pin {
-  min-width: 24px;
-  min-height: 24px;
-  border-radius: 9999px;
-  background-color: @easel_blue;
-  border: 2px solid #ffffff;
-  box-shadow: 0 1px 4px alpha(#000, 0.4);
-}
-
-.map-pin.map-pin-single {
-  min-width: 16px;
-  min-height: 16px;
-}
-
-.map-pin-count {
-  color: #ffffff;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0 4px;
 }
 
 /* People card cover — a softly rounded square (more than a thumbnail's 4px,
@@ -789,13 +765,21 @@ window.dark .editor-scale slider {
   border-radius: 18px;
 }
 
-/* "In this photo": names in the panel's own mono text style, one per line.
-   They underline and pick up the accent on hover, and remove on click. */
+/* "In this photo": the tagged names as a right-aligned, comma-separated value
+   in the panel's own mono style (matching .info-value). Each name underlines
+   and picks up the accent on hover — click opens the person, right-click
+   removes. The FlowBox wraps them and its children carry no chrome. */
+.people-value > flowboxchild {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .person-name,
 .person-add {
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
-  color: alpha(@window_fg_color, 0.7);
+  color: alpha(@window_fg_color, 0.55);
 }
 
 .person-name:hover {
@@ -819,5 +803,5 @@ window.dark .person-add {
 }
 
 .person-popover > contents {
-  padding: 8px;
+  padding: 4px;
 }
