@@ -1228,16 +1228,13 @@ class EaselWindow(Adw.ApplicationWindow):
             self._info_row("Path", path, on_click=lambda p=path: self._open_in_files(p)))
 
         # Opening the panel narrows the grid, which reflows the columns and would
-        # otherwise make the photo you just clicked jump. Note where the photo
-        # sits in the viewport *before* the reflow, then re-anchor it there after.
-        anchor = self._photo_viewport_y(photo_id)
+        # otherwise make the photo you just clicked jump. Record where it sits
+        # now, then re-anchor it there once the grid has reflowed.
+        self._anchor_selection(photo_id)
 
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
-        self._scroll_grid_to_photo(photo_id)
-        if anchor is not None:
-            GLib.idle_add(self._reanchor_photo, photo_id, anchor)
 
     def _grid_and_source(self):
         return {
@@ -1261,51 +1258,102 @@ class EaselWindow(Adw.ApplicationWindow):
                 child = child.get_next_sibling()
         return None
 
-    def _photo_viewport_y(self, photo_id):
-        """The clicked photo's tile top, in the scroller's viewport coordinates,
-        or None if it isn't currently realised."""
+    def _grid_geometry(self, grid, source):
+        """Infer the grid's layout from its realised tiles: (ncols, row_height,
+        y0) such that model index j sits at content-y = y0 + (j // ncols) *
+        row_height. Uses tile positions (content coordinates), so it needs no
+        knowledge of CSS margins/spacing. None if too few tiles are realised."""
+        index_of = {p.id: k for k, p in enumerate(source)}
+        samples = []  # (index, content_y)
+        stack = [grid]
+        while stack:
+            w = stack.pop()
+            p = getattr(w, "_photo", None)
+            if p is not None and p.id in index_of:
+                ok, pt = w.compute_point(grid, Graphene.Point().init(0, 0))
+                if ok:
+                    samples.append((index_of[p.id], round(pt.y)))
+            child = w.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+        if len(samples) < 2:
+            return None
+        rows = sorted({y for _, y in samples})
+        gaps = [b - a for a, b in zip(rows, rows[1:]) if b - a > 1]
+        if not gaps:
+            return None  # only one row realised — can't tell the row pitch
+        row_h = min(gaps)
+        counts = {}
+        for _, y in samples:
+            counts[y] = counts.get(y, 0) + 1
+        ncols = max(counts.values())  # a full row reveals the column count
+        if ncols < 1:
+            return None
+        j, yj = samples[0]
+        y0 = yj - (j // ncols) * row_h
+        return ncols, row_h, y0
+
+    def _anchor_selection(self, photo_id):
+        """Remember the clicked photo's viewport offset, then re-anchor it to
+        that offset after the grid reflows. Triggered on the scroller's
+        'changed' signal (fires once the reflow updates the content height), so
+        the measurement is taken after the new column count is in effect."""
         grid, _ = self._grid_and_source()
         if grid is None:
-            return None
-        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
-        tile = self._find_tile(grid, photo_id)
-        if tile is None or scrolled is None:
-            return None
-        ok, pt = tile.compute_point(scrolled, Graphene.Point().init(0, 0))
-        return pt.y if ok else None
-
-    def _scroll_grid_to_photo(self, photo_id):
-        grid, source = self._grid_and_source()
-        if grid is None or not hasattr(grid, "scroll_to"):
             return
-        for i, p in enumerate(source):
-            if p.id == photo_id:
-                try:
-                    grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)
-                except Exception:
-                    pass
-                return
-
-    def _reanchor_photo(self, photo_id, anchor_y):
-        """After the grid has reflowed into the narrower width, scroll so the
-        photo sits at the same viewport position it had before the panel
-        opened — so selecting a photo doesn't make the grid jump."""
-        grid, _ = self._grid_and_source()
-        if grid is None:
-            return False
         scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
         tile = self._find_tile(grid, photo_id)
         if tile is None or scrolled is None:
-            return False
-        ok, pt = tile.compute_point(scrolled, Graphene.Point().init(0, 0))
+            return
+        ok, pt = tile.compute_point(grid, Graphene.Point().init(0, 0))
         if not ok:
-            return False
+            return
         vadj = scrolled.get_vadjustment()
-        target = vadj.get_value() + (pt.y - anchor_y)
+        offset = pt.y - vadj.get_value()  # where in the viewport it sits now
+
+        state = {"done": False, "handler": 0, "timeout": 0}
+
+        def finish():
+            if state["done"]:
+                return
+            state["done"] = True
+            if state["handler"]:
+                vadj.disconnect(state["handler"])
+            if state["timeout"]:
+                GLib.source_remove(state["timeout"])
+
+        def on_changed(_adj):
+            finish()
+            self._reanchor_photo(photo_id, offset)
+
+        state["handler"] = vadj.connect("changed", on_changed)
+        # If the column count didn't actually change, 'changed' won't fire and
+        # nothing needs re-anchoring — just drop the handler after a moment.
+        state["timeout"] = GLib.timeout_add(200, lambda: (finish(), False)[1])
+
+    def _reanchor_photo(self, photo_id, offset):
+        grid, source = self._grid_and_source()
+        if grid is None:
+            return
+        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
+        if scrolled is None:
+            return
+        geom = self._grid_geometry(grid, source)
+        try:
+            i = next(k for k, p in enumerate(source) if p.id == photo_id)
+        except StopIteration:
+            return
+        vadj = scrolled.get_vadjustment()
+        if geom is None:
+            grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)  # at least keep it visible
+            return
+        ncols, row_h, y0 = geom
+        content_y = y0 + (i // ncols) * row_h
+        target = content_y - offset
         target = max(vadj.get_lower(),
                      min(target, vadj.get_upper() - vadj.get_page_size()))
         vadj.set_value(target)
-        return False
 
     def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
