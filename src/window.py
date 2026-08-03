@@ -403,33 +403,36 @@ class EaselWindow(Adw.ApplicationWindow):
 
     _TILE_GAP = 2  # px between tiles (1px margin each side)
 
-    def _grid_content_width(self):
-        """The width available to the photo grid, mirroring _apply_layout_metrics
-        (page margins, the grid's own 24px margins, and the info panel when
-        open). Used to size square tiles so a row of them fills the paper."""
+    def _tile_px(self):
+        """Square tile size = the grid's column width for the current column
+        count, derived from the available paper width (mirrors
+        _apply_layout_metrics: page margins, the grid's 24px margins, and the
+        info panel when open). Tiles can shrink below this (fill mode), so it
+        never forces the grid wider — it only pins the tile height, which the
+        grid matches horizontally, giving squares that fill the row."""
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
         if self.info_revealer.get_reveal_child():
             paper -= round(w * 0.04) + self.PANEL_WIDTH
-        return max(240, paper - 2 * SPACE_L)
-
-    def _tile_px(self):
-        """Square tile size for the current column count — each tile is one
-        column wide, so tiles stay square and a row fills the paper."""
+        content = max(240, paper - 2 * SPACE_L)
         n = self._columns_for_thumb()
-        return max(120, int((self._grid_content_width() - self._TILE_GAP * n) / n))
+        return max(120, int((content - self._TILE_GAP * n) / n))
 
     def _apply_thumb_columns(self):
+        # Cap the columns at the chosen count; keep the minimum low so a narrow
+        # window drops columns instead of forcing the grid (and window) wider —
+        # the tile size is biased just under one column, so a normal-width
+        # window still lays out exactly `n`.
         n = self._columns_for_thumb()
         for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
-            grid.set_min_columns(n)
+            grid.set_min_columns(2)
             grid.set_max_columns(n)
 
     def _resize_tiles(self):
-        """Update the size of already-realised tiles when the available width
-        changes (window resize, panel open/close) without rebuilding the stores
-        — so scroll position and selection are kept."""
+        """Re-square already-realised tiles when the available width changes
+        (window resize, panel open/close) without rebuilding the stores — so
+        scroll position and selection are kept."""
         size = self._tile_px()
         for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
             stack = [grid]
@@ -681,6 +684,7 @@ class EaselWindow(Adw.ApplicationWindow):
         overlay = Gtk.Overlay()
         swatch = Swatch("", size=self._tile_px())
         swatch.add_css_class("card-swatch")
+        swatch.set_fill(True)  # width shrinks to the column; height = set size
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
