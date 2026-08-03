@@ -411,12 +411,11 @@ class EaselWindow(Adw.ApplicationWindow):
     _TILE_GAP = 2  # px between tiles (1px margin each side)
 
     def _tile_px(self):
-        """Square tile size = the grid's column width for the current column
-        count, derived from the available paper width (mirrors
-        _apply_layout_metrics: page margins, the grid's 24px margins, and the
-        info panel when open). Tiles can shrink below this (fill mode), so it
-        never forces the grid wider — it only pins the tile height, which the
-        grid matches horizontally, giving squares that fill the row."""
+        """Square tile size ≈ one grid column, from the available paper width
+        (mirrors _apply_layout_metrics: page margins, the grid's 24px margins,
+        and the info panel when open). Kept a few px *under* the exact column so
+        the grid reliably lays out the intended column count and the fixed-size
+        tiles never overflow their cell (which would force the grid wider)."""
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
@@ -424,7 +423,7 @@ class EaselWindow(Adw.ApplicationWindow):
             paper -= round(w * 0.04) + self.PANEL_WIDTH
         content = max(240, paper - 2 * SPACE_L)
         n = self._columns_for_thumb()
-        return max(120, int((content - self._TILE_GAP * n) / n))
+        return max(120, int((content - (self._TILE_GAP + 3) * n) / n))
 
     def _apply_thumb_columns(self):
         # Cap the columns at the chosen count; keep the minimum low so a narrow
@@ -689,9 +688,13 @@ class EaselWindow(Adw.ApplicationWindow):
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
+        # A fixed square, centred in its grid cell. Uniform tile height keeps the
+        # rows tight (no stray vertical gaps), and the size is picked to about
+        # one column wide so a row still fills the paper.
         swatch = Swatch("", size=self._tile_px())
         swatch.add_css_class("card-swatch")
-        swatch.set_fill(True)  # width shrinks to the column; height = set size
+        swatch.set_halign(Gtk.Align.CENTER)
+        swatch.set_valign(Gtk.Align.CENTER)
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
