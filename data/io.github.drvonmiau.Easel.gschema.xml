@@ -47,14 +47,19 @@
 			<summary>Albums tab sort order</summary>
 		</key>
 		<key name="map-offline" type="b">
-			<default>false</default>
+			<default>true</default>
 			<summary>Use the offline map</summary>
-			<description>Draw a simple built-in vector map instead of streaming OpenStreetMap tiles. No network is used, but the map has less detail.</description>
+			<description>Draw a simple built-in vector map instead of streaming OpenStreetMap tiles. No network is used, but the map has less detail. Default because streaming tiles rely on an image loader that isn't available in every sandbox.</description>
 		</key>
 		<key name="map-banner-dismissed" type="b">
 			<default>false</default>
 			<summary>Map offline-option banner dismissed</summary>
 			<description>Whether the user has dismissed the notice that the map can run offline.</description>
+		</key>
+		<key name="map-offline-migrated" type="b">
+			<default>false</default>
+			<summary>Map default migrated to offline</summary>
+			<description>Internal: whether the one-time switch of the map default to offline has run.</description>
 		</key>
 	</schema>
 </schemalist>

@@ -202,6 +202,13 @@ class EaselWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
         self.con = lib.connect()
         self.settings = Gio.Settings.new(APP_ID)
+        # One-time: the map now defaults to the offline vector map, because
+        # streaming OpenStreetMap tiles needs an image loader (glycin) that
+        # fails in some sandboxes. Flip the old online default once; users can
+        # still choose OpenStreetMap in Preferences afterwards.
+        if not self.settings.get_boolean("map-offline-migrated"):
+            self.settings.set_boolean("map-offline", True)
+            self.settings.set_boolean("map-offline-migrated", True)
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
@@ -393,7 +400,7 @@ class EaselWindow(Adw.ApplicationWindow):
     # The thumbnail slider chooses how many photos sit across the grid rather
     # than a fixed pixel size: tiles fill their column, so at the largest end
     # one photo is ~a third of the paper, and at the smallest end many fit.
-    _MIN_COLS, _MAX_COLS = 3, 9
+    _MIN_COLS, _MAX_COLS = 3, 12
 
     def _columns_for_thumb(self):
         lo, hi = 110, 320  # matches the slider / thumb-size range
