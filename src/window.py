@@ -20,7 +20,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango
 
 from . import library as lib
 from .models import Album, Period, Person, Photo
@@ -1227,20 +1227,55 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_rows_box.append(
             self._info_row("Path", path, on_click=lambda p=path: self._open_in_files(p)))
 
+        # Opening the panel narrows the grid, which reflows the columns and would
+        # otherwise make the photo you just clicked jump. Note where the photo
+        # sits in the viewport *before* the reflow, then re-anchor it there after.
+        anchor = self._photo_viewport_y(photo_id)
+
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
-        # Opening the panel narrows the grid, which reflows the columns and can
-        # push the photo you just clicked off-screen. Scroll it back into view so
-        # the selection is never "lost".
         self._scroll_grid_to_photo(photo_id)
+        if anchor is not None:
+            GLib.idle_add(self._reanchor_photo, photo_id, anchor)
 
-    def _scroll_grid_to_photo(self, photo_id):
-        grid, source = {
+    def _grid_and_source(self):
+        return {
             "all_photos": (self.photo_grid, self._visible_photos),
             "favourites": (self.fav_grid, self._visible_favs),
             "detail": (self.detail_photos_grid, self._detail_photos),
         }.get(self.view, (None, None))
+
+    def _find_tile(self, grid, photo_id):
+        """The realised tile widget bound to photo_id, or None. Walks only the
+        grid's live (virtualised) subtree, so it's cheap."""
+        stack = [grid]
+        while stack:
+            w = stack.pop()
+            p = getattr(w, "_photo", None)
+            if p is not None and p.id == photo_id:
+                return w
+            child = w.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+        return None
+
+    def _photo_viewport_y(self, photo_id):
+        """The clicked photo's tile top, in the scroller's viewport coordinates,
+        or None if it isn't currently realised."""
+        grid, _ = self._grid_and_source()
+        if grid is None:
+            return None
+        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
+        tile = self._find_tile(grid, photo_id)
+        if tile is None or scrolled is None:
+            return None
+        ok, pt = tile.compute_point(scrolled, Graphene.Point().init(0, 0))
+        return pt.y if ok else None
+
+    def _scroll_grid_to_photo(self, photo_id):
+        grid, source = self._grid_and_source()
         if grid is None or not hasattr(grid, "scroll_to"):
             return
         for i, p in enumerate(source):
@@ -1250,6 +1285,27 @@ class EaselWindow(Adw.ApplicationWindow):
                 except Exception:
                     pass
                 return
+
+    def _reanchor_photo(self, photo_id, anchor_y):
+        """After the grid has reflowed into the narrower width, scroll so the
+        photo sits at the same viewport position it had before the panel
+        opened — so selecting a photo doesn't make the grid jump."""
+        grid, _ = self._grid_and_source()
+        if grid is None:
+            return False
+        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
+        tile = self._find_tile(grid, photo_id)
+        if tile is None or scrolled is None:
+            return False
+        ok, pt = tile.compute_point(scrolled, Graphene.Point().init(0, 0))
+        if not ok:
+            return False
+        vadj = scrolled.get_vadjustment()
+        target = vadj.get_value() + (pt.y - anchor_y)
+        target = max(vadj.get_lower(),
+                     min(target, vadj.get_upper() - vadj.get_page_size()))
+        vadj.set_value(target)
+        return False
 
     def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
