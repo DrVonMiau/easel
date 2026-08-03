@@ -47,6 +47,7 @@
             "name": "libshumate",
             "buildsystem": "meson",
             "config-opts": [
+                "--libdir=lib",
                 "-Ddemos=false",
                 "-Dgtk_doc=false",
                 "-Dvapi=false"
