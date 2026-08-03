@@ -66,7 +66,7 @@ SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 POINTER_CURSOR = Gdk.Cursor.new_from_name("pointer")
 
 SORT_OPTIONS = {
-    "photos": [("Newest", "date"), ("Name", "name")],
+    "photos": [("Newest", "date"), ("Oldest", "date-asc")],
     "albums": [("Name", "name"), ("Newest", "date"), ("Photos", "count")],
 }
 SORT_GROUP_FOR_TAB = {"all_photos": "photos", "favourites": "photos", "albums": "albums"}
@@ -211,6 +211,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._photos_all = []
         self._albums_all = []
         self._persons_all = []
+        self._photo_people = {}   # photo_id -> [names], for search
         self._map_view = None
         self._gps_backfilled = False
         self._visible_photos = []
@@ -236,6 +237,10 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self._sort = {group: self.settings.get_string(f"sort-{group}")
                       for group in SORT_OPTIONS}
+        # Photos used to offer a "name" sort; fall back to newest if that's what
+        # was saved, so the (now Newest/Oldest) menu has a valid selection.
+        if self._sort["photos"] not in ("date", "date-asc"):
+            self._sort["photos"] = "date"
 
         self._tab_buttons = {
             "all_photos": self.tab_all_photos,
@@ -380,9 +385,32 @@ class EaselWindow(Adw.ApplicationWindow):
         # Photo grids rebind from their stores (bind reads the current thumb
         # size). Month/Year period cards are a fixed size, so they don't change;
         # only the drill-down detail grid needs re-rendering.
+        self._apply_thumb_columns()
         self._apply_filters()
         if self.view == "detail":
             self._render_detail()
+
+    # The thumbnail slider chooses how many photos sit across the grid rather
+    # than a fixed pixel size: tiles fill their column, so at the largest end
+    # one photo is ~a third of the paper, and at the smallest end many fit.
+    _MIN_COLS, _MAX_COLS = 3, 9
+
+    def _columns_for_thumb(self):
+        lo, hi = 110, 320  # matches the slider / thumb-size range
+        t = max(0.0, min(1.0, (self._thumb_size - lo) / float(hi - lo)))
+        # Bigger slider -> fewer, larger columns; max slider -> 3 (≈33% each).
+        return round(self._MAX_COLS - t * (self._MAX_COLS - self._MIN_COLS))
+
+    def _tile_decode_size(self):
+        # Decode a touch larger than a typical column so fill-sized tiles stay
+        # crisp without decoding the full image.
+        return max(160, min(600, round(1400 / self._columns_for_thumb())))
+
+    def _apply_thumb_columns(self):
+        n = self._columns_for_thumb()
+        for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
+            grid.set_min_columns(n)
+            grid.set_max_columns(n)
 
     def _on_realize(self, *_args):
         surface = self.get_surface()
@@ -518,6 +546,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self.people_grid.connect(
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
+        self._apply_thumb_columns()
+
     def _setup_map(self):
         # A slim banner tells people the map can run offline; the actual choice
         # lives in Preferences (the "Offline map" switch). map_slot is a
@@ -611,14 +641,16 @@ class EaselWindow(Adw.ApplicationWindow):
         self._bind_tile(tile, photo, source_name)
 
     def _make_tile(self):
+        # 1px margins → a 2px gap between neighbouring tiles.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                      margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+                      margin_top=1, margin_bottom=1, margin_start=1, margin_end=1)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
-        swatch = Swatch("", size=self._thumb_size)
+        swatch = Swatch("", size=self._tile_decode_size())
         swatch.add_css_class("card-swatch")
+        swatch.set_fill(True)  # fill the grid column; tiles size with the grid
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
@@ -698,8 +730,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_item_id = photo.id
         tile._menu_entries = PHOTO_ENTRIES
         tile._menu_extra = {}
-        tile.swatch.set_size(self._thumb_size)
-        tile.set_size_request(self._thumb_size + 12, -1)
+        tile.swatch.set_size(self._tile_decode_size())
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
@@ -1557,6 +1588,7 @@ class EaselWindow(Adw.ApplicationWindow):
                    cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
             for r in lib.all_persons(self.con)
         ]
+        self._photo_people = lib.people_by_photo(self.con)
         if self.view == "people":
             self._render_people()
         elif (self.view == "detail" and self._detail_source
@@ -2593,8 +2625,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self._apply_filters()
 
     def _sorted_photos(self, photos):
-        if self._sort["photos"] == "name":
-            return sorted(photos, key=lambda p: os.path.basename(p.path).lower())
+        if self._sort["photos"] == "date-asc":
+            return sorted(photos, key=lambda p: p.date_taken)
         return sorted(photos, key=lambda p: -p.date_taken)
 
     def _sorted_albums(self, albums):
@@ -2605,8 +2637,30 @@ class EaselWindow(Adw.ApplicationWindow):
             return sorted(albums, key=lambda a: (-a.photo_count, a.title.lower()))
         return sorted(albums, key=lambda a: a.title.lower())
 
+    def _photo_datetext(self, p):
+        """Searchable date text for a photo: year plus month name (full and
+        abbreviated), so "2014", "march" and "mar" all match."""
+        if not p.date_taken:
+            return ""
+        try:
+            dt = datetime.fromtimestamp(p.date_taken)
+        except (ValueError, OSError):
+            return ""
+        return f"{dt.strftime('%Y')} {dt.strftime('%B')} {dt.strftime('%b')}".lower()
+
     def _photo_matches(self, p, q):
-        return not q or q in os.path.basename(p.path).lower() or q in (p.album or "").lower()
+        if not q:
+            return True
+        if q in os.path.basename(p.path).lower():
+            return True
+        if q in (p.album or "").lower():
+            return True
+        # People tagged in the photo.
+        for name in self._photo_people.get(p.id, ()):
+            if q in name.lower():
+                return True
+        # Date: year / month name.
+        return q in self._photo_datetext(p)
 
     def _apply_filters(self):
         q = self._search_query
@@ -2685,6 +2739,7 @@ class EaselWindow(Adw.ApplicationWindow):
                    cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
             for r in lib.all_persons(self.con)
         ]
+        self._photo_people = lib.people_by_photo(self.con)
         self._apply_filters()
         if self.view == "detail" and self._detail_source is not None:
             self._render_detail()

@@ -845,13 +845,30 @@ class Swatch(Gtk.Widget):
         super().__init__()
         self._size = size
         self._texture = None
+        self._fill = False
         self._placeholder_text = placeholder_text  # kept for API compatibility
         self.set_overflow(Gtk.Overflow.HIDDEN)
         self.add_css_class("swatch")
         self.set_path(None)
 
+    def set_fill(self, fill):
+        """In fill mode the swatch takes whatever width it's given and stays
+        square (height follows width). Used by the photo grid so a tile fills
+        its column; the fixed-size default is kept for covers and previews."""
+        if fill != self._fill:
+            self._fill = fill
+            self.queue_resize()
+
     def do_measure(self, orientation, for_size):
-        return (self._size, self._size, -1, -1)
+        if not self._fill:
+            return (self._size, self._size, -1, -1)
+        # Fill mode: shrink to any width, prefer self._size; height = width so
+        # the tile stays square whatever column width the grid hands it.
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            return (0, self._size, -1, -1)
+        if for_size > 0:
+            return (for_size, for_size, -1, -1)
+        return (0, self._size, -1, -1)
 
     def set_size(self, size):
         if size != self._size:

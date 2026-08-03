@@ -792,6 +792,16 @@ def get_person(con, person_id):
                        (person_id,)).fetchone()
 
 
+def people_by_photo(con):
+    """A dict photo_id -> list of tagged person names, for search."""
+    out = {}
+    for r in con.execute(
+            """SELECT f.photo_id AS pid, p.name AS name FROM faces f
+               JOIN persons p ON p.id = f.person_id"""):
+        out.setdefault(r["pid"], []).append(r["name"])
+    return out
+
+
 def photos_for_person(con, person_id):
     """Every photo a person is tagged in, newest first."""
     return con.execute(
