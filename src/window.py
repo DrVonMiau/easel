@@ -401,16 +401,46 @@ class EaselWindow(Adw.ApplicationWindow):
         # Bigger slider -> fewer, larger columns; max slider -> 3 (≈33% each).
         return round(self._MAX_COLS - t * (self._MAX_COLS - self._MIN_COLS))
 
-    def _tile_decode_size(self):
-        # Decode a touch larger than a typical column so fill-sized tiles stay
-        # crisp without decoding the full image.
-        return max(160, min(600, round(1400 / self._columns_for_thumb())))
+    _TILE_GAP = 2  # px between tiles (1px margin each side)
+
+    def _grid_content_width(self):
+        """The width available to the photo grid, mirroring _apply_layout_metrics
+        (page margins, the grid's own 24px margins, and the info panel when
+        open). Used to size square tiles so a row of them fills the paper."""
+        w = self._surface_width or 1180
+        margin_x = max(SPACE_L, round(w * 0.05))
+        paper = w - 2 * margin_x
+        if self.info_revealer.get_reveal_child():
+            paper -= round(w * 0.04) + self.PANEL_WIDTH
+        return max(240, paper - 2 * SPACE_L)
+
+    def _tile_px(self):
+        """Square tile size for the current column count — each tile is one
+        column wide, so tiles stay square and a row fills the paper."""
+        n = self._columns_for_thumb()
+        return max(120, int((self._grid_content_width() - self._TILE_GAP * n) / n))
 
     def _apply_thumb_columns(self):
         n = self._columns_for_thumb()
         for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
             grid.set_min_columns(n)
             grid.set_max_columns(n)
+
+    def _resize_tiles(self):
+        """Update the size of already-realised tiles when the available width
+        changes (window resize, panel open/close) without rebuilding the stores
+        — so scroll position and selection are kept."""
+        size = self._tile_px()
+        for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
+            stack = [grid]
+            while stack:
+                w = stack.pop()
+                if getattr(w, "_photo", None) is not None and hasattr(w, "swatch"):
+                    w.swatch.set_size(size)
+                child = w.get_first_child()
+                while child:
+                    stack.append(child)
+                    child = child.get_next_sibling()
 
     def _on_realize(self, *_args):
         surface = self.get_surface()
@@ -423,6 +453,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._surface_width = surface.get_width()
         self._surface_height = surface.get_height()
         self._apply_layout_metrics()
+        self._resize_tiles()
         return False
 
     def _apply_layout_metrics(self):
@@ -648,9 +679,8 @@ class EaselWindow(Adw.ApplicationWindow):
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
-        swatch = Swatch("", size=self._tile_decode_size())
+        swatch = Swatch("", size=self._tile_px())
         swatch.add_css_class("card-swatch")
-        swatch.set_fill(True)  # fill the grid column; tiles size with the grid
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
@@ -730,7 +760,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_item_id = photo.id
         tile._menu_entries = PHOTO_ENTRIES
         tile._menu_extra = {}
-        tile.swatch.set_size(self._tile_decode_size())
+        tile.swatch.set_size(self._tile_px())
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
@@ -1266,6 +1296,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
+        self._resize_tiles()
 
     def _grid_and_source(self):
         return {
@@ -1603,6 +1634,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_photo_id = None
         self._select_tile(None)
         self._apply_layout_metrics()
+        self._resize_tiles()
 
     def _info_fullscreen(self):
         if self._info_photo_id is not None:
