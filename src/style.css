@@ -758,6 +758,35 @@ window.dark .editor-scale slider {
   border-radius: 16px;               /* radius token: card = 16 */
 }
 
+/* Slim notice at the top of the map: the offline option lives in Preferences,
+   this just points at it (and offers a one-tap switch). */
+.map-banner {
+  padding: 8px 8px 8px 16px;
+  background-color: alpha(@easel_blue, 0.14);
+}
+
+.map-banner-text {
+  font-size: 13px;
+  color: @window_fg_color;
+}
+
+.map-banner-btn {
+  font-weight: 600;
+  color: @easel_blue;
+}
+
+window.dark .map-banner-btn {
+  color: @easel_blue_light;
+}
+
+.map-banner-close {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 9999px;
+  -gtk-icon-size: 14px;
+}
+
 /* Photo-thumbnail markers on the OpenStreetMap (Apple Photos style): a small
    rounded photo with a white ring and a soft shadow, and a count badge when a
    spot holds several photos. */

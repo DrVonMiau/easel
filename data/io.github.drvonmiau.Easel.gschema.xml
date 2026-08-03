@@ -46,5 +46,15 @@
 			<default>'name'</default>
 			<summary>Albums tab sort order</summary>
 		</key>
+		<key name="map-offline" type="b">
+			<default>false</default>
+			<summary>Use the offline map</summary>
+			<description>Draw a simple built-in vector map instead of streaming OpenStreetMap tiles. No network is used, but the map has less detail.</description>
+		</key>
+		<key name="map-banner-dismissed" type="b">
+			<default>false</default>
+			<summary>Map offline-option banner dismissed</summary>
+			<description>Whether the user has dismissed the notice that the map can run offline.</description>
+		</key>
 	</schema>
 </schemalist>

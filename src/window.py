@@ -519,21 +519,73 @@ class EaselWindow(Adw.ApplicationWindow):
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
     def _setup_map(self):
-        # Prefer a real, zoomable OpenStreetMap with photo-thumbnail markers
-        # (libshumate, bundled in the manifest; needs network for tiles). If it
-        # can't be built for any reason, fall back to the offline vector map so
-        # the Map view always works.
+        # A slim banner tells people the map can run offline; the actual choice
+        # lives in Preferences (the "Offline map" switch). map_slot is a
+        # vertical box: banner on top, the map widget below.
+        self._map_banner = self._build_map_banner()
+        self.map_slot.append(self._map_banner)
+        self._map_view = None
+        self._build_map_widget()
+        self._update_map_banner()
+        for key in ("map-offline", "map-banner-dismissed"):
+            self.settings.connect(f"changed::{key}", lambda *_a: self._on_map_mode_changed())
+
+    def _build_map_widget(self):
+        """Create the map widget for the current mode and put it in the slot.
+        Online = a real OpenStreetMap (libshumate); offline = the built-in
+        vector map. If the online map can't be built, fall back to offline so
+        the Map view always works."""
+        offline = self.settings.get_boolean("map-offline")
         widget = None
-        try:
-            from .shumate_map import ShumateMap
-            widget = ShumateMap()
-        except Exception as exc:  # ImportError, or any Shumate failure
-            print(f"[easel] OpenStreetMap unavailable ({exc}); using offline map",
-                  file=sys.stderr)
+        if not offline:
+            try:
+                from .shumate_map import ShumateMap
+                widget = ShumateMap()
+            except Exception as exc:  # ImportError, or any Shumate failure
+                print(f"[easel] OpenStreetMap unavailable ({exc}); using offline map",
+                      file=sys.stderr)
+        if widget is None:
             widget = MapView()
         widget.set_activate_cb(self._on_map_pin)
         self._map_view = widget
         self.map_slot.append(widget)
+
+    def _on_map_mode_changed(self):
+        if self._map_view is not None:
+            self.map_slot.remove(self._map_view)
+            self._map_view = None
+        self._build_map_widget()
+        self._update_map_banner()
+        if self.view == "map":
+            self._render_map()
+
+    def _build_map_banner(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+                      css_classes=["map-banner"])
+        bar.append(Gtk.Label(
+            label="This map streams OpenStreetMap tiles. It can also run "
+                  "offline, with less detail.",
+            xalign=0, hexpand=True, wrap=True, css_classes=["map-banner-text"]))
+        use_offline = Gtk.Button(label="Use offline map",
+                                 css_classes=["flat", "map-banner-btn"])
+        use_offline.set_cursor(POINTER_CURSOR)
+        use_offline.connect(
+            "clicked", lambda *_: self.settings.set_boolean("map-offline", True))
+        bar.append(use_offline)
+        close = Gtk.Button(icon_name="easel-x-symbolic", tooltip_text="Dismiss",
+                           css_classes=["flat", "map-banner-close"])
+        close.set_cursor(POINTER_CURSOR)
+        close.connect(
+            "clicked", lambda *_: self.settings.set_boolean("map-banner-dismissed", True))
+        bar.append(close)
+        return bar
+
+    def _update_map_banner(self):
+        # Only worth showing while online (to point at the offline option) and
+        # until the user dismisses it.
+        offline = self.settings.get_boolean("map-offline")
+        dismissed = self.settings.get_boolean("map-banner-dismissed")
+        self._map_banner.set_visible(not offline and not dismissed)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -691,11 +743,13 @@ class EaselWindow(Adw.ApplicationWindow):
             if self._single_click_source:
                 GLib.source_remove(self._single_click_source)
                 self._single_click_source = 0
-            # Clicking the already-open photo again de-selects it and closes
-            # the panel (a toggle).
+            # Clicking a photo (even the already-open one) keeps the panel open
+            # and re-selects it — it is NOT a toggle. Closing the panel is the
+            # close button's job. A re-click that closed the panel made a
+            # double-click-to-open flicker (close, then open the lightbox).
             if (self._info_photo_id == photo.id
                     and self.info_revealer.get_reveal_child()):
-                self._close_info()
+                self._select_tile(tile)
                 return
             self._select_tile(tile)  # instant highlight; info opens after the tap window
             pid = photo.id
@@ -2024,6 +2078,16 @@ class EaselWindow(Adw.ApplicationWindow):
         theme_row.connect("notify::selected", on_theme_selected)
         appearance.add(theme_row)
         page.add(appearance)
+
+        map_group = Adw.PreferencesGroup(title="Map")
+        map_row = Adw.SwitchRow(
+            title="Offline map",
+            subtitle="Draw a simple built-in map instead of streaming "
+                     "OpenStreetMap tiles. No network; less detail.")
+        self.settings.bind("map-offline", map_row, "active",
+                           Gio.SettingsBindFlags.DEFAULT)
+        map_group.add(map_row)
+        page.add(map_group)
 
         folders = Adw.PreferencesGroup(title="Photo Folders",
                                        description="Folders Easel scans for photos")
