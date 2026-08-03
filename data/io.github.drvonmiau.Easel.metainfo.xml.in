@@ -43,8 +43,8 @@
 			<description>
 				<p>Places and people.</p>
 				<ul>
-					<li>A Map view that pins your photos by the GPS location in their metadata, on a zoomable offline vector world map — no network, no map account</li>
-					<li>Zoom and pan; photos from the same place gather into one pin and separate as you zoom in. Click a pin to open its photos</li>
+					<li>A Map view that places your photos by the GPS location in their metadata on a zoomable OpenStreetMap, each spot shown as a photo thumbnail</li>
+					<li>Photos from the same place gather into one thumbnail with a count; click it to open them all</li>
 					<li>People: tag someone by name right on a photo, then browse every photo they're in</li>
 				</ul>
 			</description>

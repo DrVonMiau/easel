@@ -929,12 +929,14 @@ _WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
 class MapView(Gtk.Widget):
     """An offline, zoomable vector world map that pins photos by location.
 
-    Easel is offline-first, so the map is drawn from a tiny built-in set of
-    coastline polygons (worldmap.py) — no tiles, no network, no dependency, and
-    crisp at any zoom because it's vector. Scroll or pinch to zoom, drag to pan.
-    Photos are projected equirectangularly and clustered by screen distance, so
-    nearby shots share one pin and separate as you zoom in; clicking a pin opens
-    all of its photos.
+    This is the *fallback* Map view, used when the real OpenStreetMap
+    (shumate_map.ShumateMap) can't be built — e.g. libshumate missing. It needs
+    nothing: the world is a tiny built-in set of coastline polygons
+    (worldmap.py) — no tiles, no network, no dependency, and crisp at any zoom
+    because it's vector. Scroll or pinch to zoom, drag to pan. Photos are
+    projected equirectangularly and clustered by screen distance, so nearby
+    shots share one pin and separate as you zoom in; clicking a pin opens all of
+    its photos.
 
     Everything is painted with GSK nodes in do_snapshot — filled/stroked paths
     for land, rounded-clip circles and a text layout for pins — the drawing path

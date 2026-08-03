@@ -519,9 +519,21 @@ class EaselWindow(Adw.ApplicationWindow):
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
     def _setup_map(self):
-        self._map_view = MapView()
-        self._map_view.set_activate_cb(self._on_map_pin)
-        self.map_slot.append(self._map_view)
+        # Prefer a real, zoomable OpenStreetMap with photo-thumbnail markers
+        # (libshumate, bundled in the manifest; needs network for tiles). If it
+        # can't be built for any reason, fall back to the offline vector map so
+        # the Map view always works.
+        widget = None
+        try:
+            from .shumate_map import ShumateMap
+            widget = ShumateMap()
+        except Exception as exc:  # ImportError, or any Shumate failure
+            print(f"[easel] OpenStreetMap unavailable ({exc}); using offline map",
+                  file=sys.stderr)
+            widget = MapView()
+        widget.set_activate_cb(self._on_map_pin)
+        self._map_view = widget
+        self.map_slot.append(widget)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -1279,20 +1291,20 @@ class EaselWindow(Adw.ApplicationWindow):
         Clicking the photo above tags a new person at a pin."""
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.append(Gtk.Label(label="In this photo", xalign=0,
-                             valign=Gtk.Align.START, css_classes=["info-key"]))
-        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, hexpand=True,
-                           halign=Gtk.Align.END, min_children_per_line=1,
-                           max_children_per_line=1000, column_spacing=4,
-                           row_spacing=2, css_classes=["people-value"])
-        flow.set_activate_on_single_click(False)
+                             valign=Gtk.Align.CENTER, css_classes=["info-key"]))
+        # Names pushed to the right (hexpand claims the space; halign END places
+        # them at the right edge like the other info values).
+        names = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4,
+                        hexpand=True, halign=Gtk.Align.END, valign=Gtk.Align.CENTER,
+                        css_classes=["people-value"])
         if faces:
             last = len(faces) - 1
             for i, f in enumerate(faces):
                 text = f["name"] + ("," if i < last else "")
-                flow.insert(self._person_name_label(photo_id, f["person_id"], text), -1)
+                names.append(self._person_name_label(photo_id, f["person_id"], text))
         else:
-            flow.insert(self._add_name_label(photo_id), -1)
-        row.append(flow)
+            names.append(self._add_name_label(photo_id))
+        row.append(names)
         return row
 
     def _person_name_label(self, photo_id, person_id, text):

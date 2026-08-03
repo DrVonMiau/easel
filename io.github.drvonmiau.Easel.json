@@ -10,6 +10,7 @@
         "--socket=wayland",
         "--socket=pulseaudio",
         "--device=dri",
+        "--share=network",
         "--filesystem=home:ro",
         "--filesystem=xdg-pictures:ro",
         "--filesystem=host-os:ro",
@@ -28,6 +29,36 @@
         "*.a"
     ],
     "modules": [
+        {
+            "name": "protobuf-c",
+            "buildsystem": "autotools",
+            "config-opts": [
+                "--disable-protoc"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/protobuf-c/protobuf-c/releases/download/v1.5.2/protobuf-c-1.5.2.tar.gz",
+                    "sha256": "e2c86271873a79c92b58fef7ebf8de1aa0df4738347a8bd5d4e65a80a16d0d24"
+                }
+            ]
+        },
+        {
+            "name": "libshumate",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Ddemos=false",
+                "-Dgtk_doc=false",
+                "-Dvapi=false"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://download.gnome.org/sources/libshumate/1.6/libshumate-1.6.2.tar.xz",
+                    "sha256": "22364bb98f8b520334336ab82240196a0963489b86a5b38328e1bea2b64f3a9e"
+                }
+            ]
+        },
         {
             "name": "ibm-plex-fonts",
             "buildsystem": "simple",

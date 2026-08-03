@@ -758,6 +758,28 @@ window.dark .editor-scale slider {
   border-radius: 16px;               /* radius token: card = 16 */
 }
 
+/* Photo-thumbnail markers on the OpenStreetMap (Apple Photos style): a small
+   rounded photo with a white ring and a soft shadow, and a count badge when a
+   spot holds several photos. */
+.map-thumb {
+  border-radius: 8px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 5px alpha(#000, 0.45);
+}
+
+.map-thumb-badge {
+  margin: 3px;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background-color: @easel_blue;
+  color: #ffffff;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px alpha(#000, 0.5);
+}
+
 /* People card cover — a softly rounded square (more than a thumbnail's 4px,
    but not a full circle, which read as awkward against the square-cropped
    photo). The swatch clips to this radius via overflow hidden. */
@@ -768,13 +790,7 @@ window.dark .editor-scale slider {
 /* "In this photo": the tagged names as a right-aligned, comma-separated value
    in the panel's own mono style (matching .info-value). Each name underlines
    and picks up the accent on hover — click opens the person, right-click
-   removes. The FlowBox wraps them and its children carry no chrome. */
-.people-value > flowboxchild {
-  padding: 0;
-  min-width: 0;
-  min-height: 0;
-}
-
+   removes. */
 .person-name,
 .person-add {
   font-family: "IBM Plex Mono", monospace;
