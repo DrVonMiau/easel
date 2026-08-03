@@ -410,37 +410,46 @@ class EaselWindow(Adw.ApplicationWindow):
 
     _TILE_GAP = 2  # px between tiles (1px margin each side)
 
-    def _tile_px(self):
-        """Square tile size ≈ one grid column, from the available paper width
-        (mirrors _apply_layout_metrics: page margins, the grid's 24px margins,
-        and the info panel when open). Kept a few px *under* the exact column so
-        the grid reliably lays out the intended column count and the fixed-size
-        tiles never overflow their cell (which would force the grid wider)."""
+    def _estimate_content_width(self):
+        """First-paint fallback for the grid width, before it's allocated —
+        mirrors _apply_layout_metrics."""
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
         if self.info_revealer.get_reveal_child():
             paper -= round(w * 0.04) + self.PANEL_WIDTH
-        content = max(240, paper - 2 * SPACE_L)
+        return max(240, paper - 2 * SPACE_L)
+
+    def _cell_px(self, grid):
+        """One grid column's width for the current column count, from the grid's
+        *actual* allocated width (falling back to an estimate before it's laid
+        out). Tiles fill this exactly, so the images touch with just the 2px
+        margin gap. Fill mode means the tile can still shrink, so this never
+        forces the grid wider."""
         n = self._columns_for_thumb()
-        return max(120, int((content - (self._TILE_GAP + 3) * n) / n))
+        gw = grid.get_width() if grid is not None else 0
+        if gw <= 1:
+            gw = self._estimate_content_width()
+        return max(120, int((gw - self._TILE_GAP * n) / n))
+
+    def _grid_for_source(self, source_name):
+        return {"photos": self.photo_grid, "favourites": self.fav_grid,
+                "detail": self.detail_photos_grid}.get(source_name, self.photo_grid)
 
     def _apply_thumb_columns(self):
         # Cap the columns at the chosen count; keep the minimum low so a narrow
-        # window drops columns instead of forcing the grid (and window) wider —
-        # the tile size is biased just under one column, so a normal-width
-        # window still lays out exactly `n`.
+        # window drops columns instead of forcing the grid (and window) wider.
         n = self._columns_for_thumb()
         for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
             grid.set_min_columns(2)
             grid.set_max_columns(n)
 
     def _resize_tiles(self):
-        """Re-square already-realised tiles when the available width changes
-        (window resize, panel open/close) without rebuilding the stores — so
-        scroll position and selection are kept."""
-        size = self._tile_px()
+        """Re-square already-realised tiles to the grid's real column width,
+        without rebuilding the stores (so scroll and selection are kept). Run
+        from an idle after a width change so the grid is freshly laid out."""
         for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
+            size = self._cell_px(grid)
             stack = [grid]
             while stack:
                 w = stack.pop()
@@ -450,6 +459,12 @@ class EaselWindow(Adw.ApplicationWindow):
                 while child:
                     stack.append(child)
                     child = child.get_next_sibling()
+        return False  # usable as a GLib.idle_add callback
+
+    def _schedule_resize_tiles(self):
+        # After a width change the grid re-lays-out on the next frame; read its
+        # real width on the following idle so tiles are sized exactly.
+        GLib.idle_add(self._resize_tiles)
 
     def _on_realize(self, *_args):
         surface = self.get_surface()
@@ -462,7 +477,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._surface_width = surface.get_width()
         self._surface_height = surface.get_height()
         self._apply_layout_metrics()
-        self._resize_tiles()
+        self._schedule_resize_tiles()
         return False
 
     def _apply_layout_metrics(self):
@@ -688,13 +703,12 @@ class EaselWindow(Adw.ApplicationWindow):
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
-        # A fixed square, centred in its grid cell. Uniform tile height keeps the
-        # rows tight (no stray vertical gaps), and the size is picked to about
-        # one column wide so a row still fills the paper.
-        swatch = Swatch("", size=self._tile_px())
+        # Fills its grid cell (width from the column, height pinned to the same
+        # size) so tiles are squares that touch with just the 2px margin gap and
+        # every row is the same height.
+        swatch = Swatch("", size=self._cell_px(self.photo_grid))
         swatch.add_css_class("card-swatch")
-        swatch.set_halign(Gtk.Align.CENTER)
-        swatch.set_valign(Gtk.Align.CENTER)
+        swatch.set_fill(True)
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
@@ -774,7 +788,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_item_id = photo.id
         tile._menu_entries = PHOTO_ENTRIES
         tile._menu_extra = {}
-        tile.swatch.set_size(self._tile_px())
+        tile.swatch.set_size(self._cell_px(self._grid_for_source(source_name)))
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
@@ -1310,7 +1324,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
-        self._resize_tiles()
+        self._schedule_resize_tiles()
 
     def _grid_and_source(self):
         return {
@@ -1648,7 +1662,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_photo_id = None
         self._select_tile(None)
         self._apply_layout_metrics()
-        self._resize_tiles()
+        self._schedule_resize_tiles()
 
     def _info_fullscreen(self):
         if self._info_photo_id is not None:
@@ -2589,6 +2603,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_store.remove_all()
         for p in self._detail_photos:
             self.detail_store.append(p)
+        self._schedule_resize_tiles()
 
     # ---------- map view ----------
 
@@ -2791,4 +2806,5 @@ class EaselWindow(Adw.ApplicationWindow):
             self._render_detail()
         elif self.view in VIEW_NAMES:
             self._select_tab(self.view)
+        self._schedule_resize_tiles()
         return False

@@ -845,12 +845,26 @@ class Swatch(Gtk.Widget):
         super().__init__()
         self._size = size
         self._texture = None
+        self._fill = False
         self._placeholder_text = placeholder_text  # kept for API compatibility
         self.set_overflow(Gtk.Overflow.HIDDEN)
         self.add_css_class("swatch")
         self.set_path(None)
 
+    def set_fill(self, fill):
+        """Fill mode (photo grid tiles): the width may shrink to whatever the
+        grid column gives it — its *minimum* width is 0, so a row of tiles never
+        forces the window wider (which loops with a no-horizontal-scroll grid).
+        The height stays pinned to the set size, so with the size kept equal to
+        the column width the tile is a square that fills its cell. Covers and
+        previews leave this off and stay a fixed square."""
+        if fill != self._fill:
+            self._fill = fill
+            self.queue_resize()
+
     def do_measure(self, orientation, for_size):
+        if self._fill and orientation == Gtk.Orientation.HORIZONTAL:
+            return (0, self._size, -1, -1)
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):
@@ -929,19 +943,19 @@ _WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
 class MapView(Gtk.Widget):
     """An offline, zoomable vector world map that pins photos by location.
 
-    This is the *fallback* Map view, used when the real OpenStreetMap
-    (shumate_map.ShumateMap) can't be built — e.g. libshumate missing. It needs
-    nothing: the world is a tiny built-in set of coastline polygons
-    (worldmap.py) — no tiles, no network, no dependency, and crisp at any zoom
-    because it's vector. Scroll or pinch to zoom, drag to pan. Photos are
-    projected equirectangularly and clustered by screen distance, so nearby
-    shots share one pin and separate as you zoom in; clicking a pin opens all of
-    its photos.
+    The default Map view. The world is drawn from built-in Natural Earth 1:10m
+    vector geometry (worldmap.py — land, lakes, country borders) with no tiles,
+    no network and no image decoding (which is what fails in the sandbox), and
+    it's crisp at any zoom because it's vector. Scroll or pinch to zoom, drag to
+    pan. Photos are projected equirectangularly and clustered by screen
+    distance, so nearby shots share one pin and separate as you zoom in;
+    clicking a pin opens all of its photos.
 
     Everything is painted with GSK nodes in do_snapshot — filled/stroked paths
-    for land, rounded-clip circles and a text layout for pins — the drawing path
-    that paints reliably in this runtime, so there are no render-to-texture
-    surprises."""
+    for land/lakes/borders, rounded-clip circles and a text layout for pins —
+    the drawing path that paints reliably in this runtime. The map paths are
+    built in content space and cached per zoom level, so panning is just a
+    translate (no rebuild) and only zooming rebuilds them."""
 
     __gtype_name__ = "EaselMapView"
 
@@ -962,6 +976,11 @@ class MapView(Gtk.Widget):
         self._cy = 0.5              # normalised viewport centre across latitude
         self._drag_origin = None
         self._zoom_start = 1.0
+        self._geo = None            # cached rings/lines from worldmap
+        self._path_key = None       # world size the paths were built for
+        self._land_path = None
+        self._lake_path = None
+        self._border_path = None
         self.set_hexpand(True)
         self.set_vexpand(True)
 
@@ -1134,6 +1153,45 @@ class MapView(Gtk.Widget):
         self.set_cursor(POINTER_CURSOR if i >= 0 else None)
         self.queue_draw()
 
+    # ---- map geometry ----
+
+    def _load_geo(self):
+        if self._geo is None:
+            self._geo = (worldmap.land_rings(), worldmap.lake_rings(),
+                         worldmap.border_lines())
+        return self._geo
+
+    def _ensure_paths(self):
+        """Build the land/lake/border paths in *content* space (world pixels at
+        the current zoom, independent of pan) and cache them by world size, so
+        panning reuses them and only a zoom change rebuilds."""
+        ww, wh = self._world_size()
+        key = round(ww, 1)
+        if key == self._path_key:
+            return
+        self._path_key = key
+        land, lakes, borders = self._load_geo()
+
+        def build(items, closed):
+            b = Gsk.PathBuilder()
+            for pts in items:
+                first = True
+                for lon, lat in pts:
+                    x = (lon + 180.0) / 360.0 * ww
+                    y = (90.0 - lat) / 180.0 * wh
+                    if first:
+                        b.move_to(x, y)
+                        first = False
+                    else:
+                        b.line_to(x, y)
+                if closed:
+                    b.close()
+            return b.to_path()
+
+        self._land_path = build(land, True)
+        self._lake_path = build(lakes, True)
+        self._border_path = build(borders, False)
+
     # ---- painting ----
 
     @staticmethod
@@ -1151,30 +1209,28 @@ class MapView(Gtk.Widget):
             return
 
         fg = self.get_color()  # foreground colour → tracks light/dark theme
-        sea = _rgba(fg.red, fg.green, fg.blue, 0.04)
-        land = _rgba(fg.red, fg.green, fg.blue, 0.14)
-        coast = _rgba(fg.red, fg.green, fg.blue, 0.32)
+        sea = _rgba(fg.red, fg.green, fg.blue, 0.05)
+        land = _rgba(fg.red, fg.green, fg.blue, 0.16)
+        coast = _rgba(fg.red, fg.green, fg.blue, 0.34)
+        border = _rgba(fg.red, fg.green, fg.blue, 0.22)
+
+        self._ensure_paths()
+        ww, wh = self._world_size()
+        off_x = self._cx * ww - w / 2.0   # content→screen: screen = content − off
+        off_y = self._cy * wh - h / 2.0
 
         bounds = Graphene.Rect().init(0, 0, w, h)
         snapshot.push_clip(bounds)
         snapshot.append_color(sea, bounds)
-
-        # Land: filled vector coastline polygons (crisp at any zoom). Even-odd
-        # so island/lake rings punch holes correctly.
-        builder = Gsk.PathBuilder()
-        for ring in worldmap.land_rings():
-            first = True
-            for lon, lat in ring:
-                x, y = self._project(lon, lat)
-                if first:
-                    builder.move_to(x, y)
-                    first = False
-                else:
-                    builder.line_to(x, y)
-            builder.close()
-        path = builder.to_path()
-        snapshot.append_fill(path, Gsk.FillRule.EVEN_ODD, land)
-        snapshot.append_stroke(path, Gsk.Stroke.new(1.0), coast)
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(-off_x, -off_y))
+        # Land fill (even-odd so island/lake rings punch holes), lakes painted
+        # back in the sea colour, then coastline + country borders stroked.
+        snapshot.append_fill(self._land_path, Gsk.FillRule.EVEN_ODD, land)
+        snapshot.append_fill(self._lake_path, Gsk.FillRule.EVEN_ODD, sea)
+        snapshot.append_stroke(self._land_path, Gsk.Stroke.new(0.8), coast)
+        snapshot.append_stroke(self._border_path, Gsk.Stroke.new(0.6), border)
+        snapshot.restore()
         snapshot.pop()  # bounds clip
 
         # Pins.
