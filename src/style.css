@@ -198,9 +198,18 @@ checkbutton radio:checked {
   color: alpha(@window_fg_color, 0.12);
 }
 
-/* Flat thumbnails — no drop shadow, and no lift/shadow on hover (the tiles
-   sit cleanly on the paper; hover feedback comes from the action buttons). */
-.swatch.card-swatch {
+/* Photo thumbnails in the Days / album / month grids: sharp square corners,
+   no border or shadow — the cropped images sit edge-to-edge with a 1px gap. */
+.swatch.photo-tile {
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+
+/* Cover thumbnails on Months / Years / Albums / People cards: a 1:1 square
+   with 8px rounded corners, flat. */
+.swatch.card-cover {
+  border-radius: 8px;
   box-shadow: none;
 }
 
@@ -229,7 +238,7 @@ checkbutton radio:checked {
 }
 
 /* Blue selection ring on the tile whose photo is open in the info panel. */
-.card-box.tile-selected .card-swatch {
+.card-box.tile-selected .photo-tile {
   box-shadow: 0 0 0 3px @easel_blue;
 }
 
@@ -548,7 +557,7 @@ window.dark .tile-fav.faved {
   color: @easel_gold_light;
 }
 
-window.dark .card-box.tile-selected .card-swatch {
+window.dark .card-box.tile-selected .photo-tile {
   box-shadow: 0 0 0 3px @easel_blue_light;
 }
 
@@ -807,13 +816,6 @@ window.dark .map-banner-btn {
   font-size: 10px;
   font-weight: 600;
   box-shadow: 0 1px 3px alpha(#000, 0.5);
-}
-
-/* People card cover — a softly rounded square (more than a thumbnail's 4px,
-   but not a full circle, which read as awkward against the square-cropped
-   photo). The swatch clips to this radius via overflow hidden. */
-.swatch.person-swatch {
-  border-radius: 18px;
 }
 
 /* "In this photo": the tagged names as a right-aligned, comma-separated value

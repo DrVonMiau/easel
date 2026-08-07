@@ -939,6 +939,13 @@ def _rgba(r, g, b, a):
 _PIN = _rgba(0x55 / 255, 0x65 / 255, 0xBF / 255, 1.0)
 _WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
 
+# Offline map palette — fixed blue water / green land, like an online slippy
+# map (so it doesn't invert with the app's light/dark theme).
+_MAP_SEA = _rgba(0xA8 / 255, 0xD5 / 255, 0xE2 / 255, 1.0)
+_MAP_LAND = _rgba(0xCC / 255, 0xE6 / 255, 0xA6 / 255, 1.0)
+_MAP_COAST = _rgba(0x6E / 255, 0x8E / 255, 0x63 / 255, 0.8)
+_MAP_BORDER = _rgba(0x7A / 255, 0x84 / 255, 0x6A / 255, 0.55)
+
 
 class MapView(Gtk.Widget):
     """An offline, zoomable vector world map that pins photos by location.
@@ -959,7 +966,8 @@ class MapView(Gtk.Widget):
 
     __gtype_name__ = "EaselMapView"
 
-    _CLUSTER_CELL = 44.0   # px grid that merges nearby pins into one
+    _CLUSTER_CELL = 56.0   # px grid that merges nearby photos into one marker
+    _MARKER = 46.0         # thumbnail marker size (px)
     _MIN_ZOOM = 1.0
     _MAX_ZOOM = 48.0
 
@@ -981,6 +989,8 @@ class MapView(Gtk.Widget):
         self._land_path = None
         self._lake_path = None
         self._border_path = None
+        self._thumbs = {}           # path -> cover thumbnail texture
+        self._thumb_pending = set()
         self.set_hexpand(True)
         self.set_vexpand(True)
 
@@ -1118,19 +1128,15 @@ class MapView(Gtk.Widget):
             clusters.sort(key=lambda c: c["n"])  # bigger pins drawn on top
         self._clusters = clusters
 
-    @staticmethod
-    def _pin_radius(n):
-        return 8.0 + min(9.0, 2.4 * math.log2(n + 1))
-
     # ---- interaction ----
 
     def _hit(self, x, y):
         self._ensure_clusters()
+        r = self._MARKER / 2.0 + 3.0   # square hit area matching the thumbnail
         best = -1
         for i, c in enumerate(self._clusters):
-            r = self._pin_radius(c["n"]) + 4.0
-            if (x - c["x"]) ** 2 + (y - c["y"]) ** 2 <= r * r:
-                best = i  # later (larger) pins win ties — they're drawn on top
+            if abs(x - c["x"]) <= r and abs(y - c["y"]) <= r:
+                best = i  # later markers win ties — they're drawn on top
         return best
 
     def _on_click(self, _gesture, _n, x, y):
@@ -1208,12 +1214,6 @@ class MapView(Gtk.Widget):
         if w <= 0 or h <= 0:
             return
 
-        fg = self.get_color()  # foreground colour → tracks light/dark theme
-        sea = _rgba(fg.red, fg.green, fg.blue, 0.05)
-        land = _rgba(fg.red, fg.green, fg.blue, 0.16)
-        coast = _rgba(fg.red, fg.green, fg.blue, 0.34)
-        border = _rgba(fg.red, fg.green, fg.blue, 0.22)
-
         self._ensure_paths()
         ww, wh = self._world_size()
         off_x = self._cx * ww - w / 2.0   # content→screen: screen = content − off
@@ -1221,44 +1221,100 @@ class MapView(Gtk.Widget):
 
         bounds = Graphene.Rect().init(0, 0, w, h)
         snapshot.push_clip(bounds)
-        snapshot.append_color(sea, bounds)
+        snapshot.append_color(_MAP_SEA, bounds)
         snapshot.save()
         snapshot.translate(Graphene.Point().init(-off_x, -off_y))
         # Land fill (even-odd so island/lake rings punch holes), lakes painted
         # back in the sea colour, then coastline + country borders stroked.
-        snapshot.append_fill(self._land_path, Gsk.FillRule.EVEN_ODD, land)
-        snapshot.append_fill(self._lake_path, Gsk.FillRule.EVEN_ODD, sea)
-        snapshot.append_stroke(self._land_path, Gsk.Stroke.new(0.8), coast)
-        snapshot.append_stroke(self._border_path, Gsk.Stroke.new(0.6), border)
+        snapshot.append_fill(self._land_path, Gsk.FillRule.EVEN_ODD, _MAP_LAND)
+        snapshot.append_fill(self._lake_path, Gsk.FillRule.EVEN_ODD, _MAP_SEA)
+        snapshot.append_stroke(self._land_path, Gsk.Stroke.new(0.8), _MAP_COAST)
+        snapshot.append_stroke(self._border_path, Gsk.Stroke.new(0.6), _MAP_BORDER)
         snapshot.restore()
         snapshot.pop()  # bounds clip
 
-        # Pins.
+        # Photo-thumbnail markers (Apple Photos style).
         self._ensure_clusters()
         for i, c in enumerate(self._clusters):
             cx, cy = c["x"], c["y"]
-            if cx < -40 or cx > w + 40 or cy < -40 or cy > h + 40:
-                continue  # skip pins panned off-screen
-            r = self._pin_radius(c["n"])
-            if i == self._hover:
-                r += 2.0
-            self._circle(snapshot, cx, cy, r + 2.0, _WHITE)  # ring
-            self._circle(snapshot, cx, cy, r, _PIN)          # disc
-            if c["n"] > 1:
-                self._draw_count(snapshot, cx, cy, r, c["n"])
-            else:
-                self._circle(snapshot, cx, cy, r * 0.34, _WHITE)  # centre dot
+            if cx < -60 or cx > w + 60 or cy < -60 or cy > h + 60:
+                continue  # off-screen after panning
+            self._draw_marker(snapshot, cx, cy, c, i == self._hover)
 
-    def _draw_count(self, snapshot, cx, cy, r, n):
+    @staticmethod
+    def _round_rect(snapshot, x, y, w, h, radius, rgba):
+        rect = Graphene.Rect().init(x, y, w, h)
+        rr = Gsk.RoundedRect()
+        rr.init_from_rect(rect, radius)
+        snapshot.push_rounded_clip(rr)
+        snapshot.append_color(rgba, rect)
+        snapshot.pop()
+
+    def _marker_texture(self, path):
+        """The cover thumbnail texture for a marker, or None until it decodes.
+        Loads from the file cache (no glycin), so it works in the sandbox."""
+        tex = self._thumbs.get(path)
+        if tex is not None:
+            return tex
+        if path in self._thumb_pending:
+            return None
+        cached = request_thumbnail(path, 96,
+                                   wants=lambda p=path: p not in self._thumbs,
+                                   callback=self._on_thumb_ready)
+        if cached is not None:
+            self._thumbs[path] = cached
+            return cached
+        self._thumb_pending.add(path)
+        return None
+
+    def _on_thumb_ready(self, path, texture):
+        self._thumb_pending.discard(path)
+        if texture is not None:
+            self._thumbs[path] = texture
+            self.queue_draw()
+        return False
+
+    def _draw_marker(self, snapshot, cx, cy, cluster, hover):
+        size = self._MARKER + (6.0 if hover else 0.0)
+        half = size / 2.0
+        # White rounded frame behind the photo.
+        self._round_rect(snapshot, cx - half - 1.5, cy - half - 1.5,
+                         size + 3.0, size + 3.0, 8.0, _WHITE)
+        inner = Graphene.Rect().init(cx - half, cy - half, size, size)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(inner, 6.0)
+        snapshot.push_rounded_clip(rounded)
+        tex = self._marker_texture(cluster["photos"][0].path)
+        tw = tex.get_width() if tex is not None else 0
+        th = tex.get_height() if tex is not None else 0
+        if tex is not None and tw > 0 and th > 0:
+            scale = max(size / tw, size / th)   # cover-fit, centre-cropped
+            dw, dh = tw * scale, th * scale
+            snapshot.append_texture(
+                tex, Graphene.Rect().init(cx - dw / 2.0, cy - dh / 2.0, dw, dh))
+        else:
+            snapshot.append_color(_PIN, inner)  # placeholder until decoded
+        snapshot.pop()
+        n = cluster["n"]
+        if n > 1:
+            self._draw_badge(snapshot, cx + half, cy - half, n)
+
+    def _draw_badge(self, snapshot, x, y, n):
+        """A small accent count pill anchored at the marker's top-right (x, y)."""
         label = str(n) if n < 1000 else "999+"
         layout = self.create_pango_layout(label)
         try:
-            ink, logical = layout.get_pixel_extents()
+            _ink, logical = layout.get_pixel_extents()
             tw, th = logical.width, logical.height
         except Exception:
-            tw, th = r, r
+            tw, th = 10, 10
+        bh = th + 2.0
+        bw = max(bh, tw + 8.0)
+        bx, by = x - bw + 4.0, y - 4.0
+        self._round_rect(snapshot, bx, by, bw, bh, bh / 2.0, _PIN)
         snapshot.save()
-        snapshot.translate(Graphene.Point().init(cx - tw / 2.0, cy - th / 2.0))
+        snapshot.translate(Graphene.Point().init(bx + (bw - tw) / 2.0,
+                                                  by + (bh - th) / 2.0))
         snapshot.append_layout(layout, _WHITE)
         snapshot.restore()
 

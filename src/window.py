@@ -408,48 +408,46 @@ class EaselWindow(Adw.ApplicationWindow):
         # Bigger slider -> fewer, larger columns; max slider -> 3 (≈33% each).
         return round(self._MAX_COLS - t * (self._MAX_COLS - self._MIN_COLS))
 
-    _TILE_GAP = 2  # px between tiles (1px margin each side)
+    # One place defines the photo grid layout for every view (Days, album and
+    # month/year detail): the same column count, the same 1px inter-tile gap,
+    # and the same square tile size. Only the photos filling it differ.
+    PHOTO_GRIDS = ("photo_grid", "fav_grid", "detail_photos_grid")
+    GRID_MARGIN = SPACE_L   # 24px page margin around every grid
+    THUMB_GAP = 1           # px gap between adjacent thumbnails
 
-    def _estimate_content_width(self):
-        """First-paint fallback for the grid width, before it's allocated —
-        mirrors _apply_layout_metrics."""
+    def _photo_grids(self):
+        return (self.photo_grid, self.fav_grid, self.detail_photos_grid)
+
+    def _cell_px(self):
+        """The square tile size for the current column count — one grid column
+        of the available paper width. Computed the same way for every grid
+        (mirrors _apply_layout_metrics: page margins, the grid's own margin, and
+        the info panel when open), so all views lay out identically. Tiles fill
+        their cell (fill mode), so this only needs to be close; it also can't
+        force the grid wider."""
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
         if self.info_revealer.get_reveal_child():
             paper -= round(w * 0.04) + self.PANEL_WIDTH
-        return max(240, paper - 2 * SPACE_L)
-
-    def _cell_px(self, grid):
-        """One grid column's width for the current column count, from the grid's
-        *actual* allocated width (falling back to an estimate before it's laid
-        out). Tiles fill this exactly, so the images touch with just the 2px
-        margin gap. Fill mode means the tile can still shrink, so this never
-        forces the grid wider."""
+        content = max(240, paper - 2 * self.GRID_MARGIN)
         n = self._columns_for_thumb()
-        gw = grid.get_width() if grid is not None else 0
-        if gw <= 1:
-            gw = self._estimate_content_width()
-        return max(120, int((gw - self._TILE_GAP * n) / n))
-
-    def _grid_for_source(self, source_name):
-        return {"photos": self.photo_grid, "favourites": self.fav_grid,
-                "detail": self.detail_photos_grid}.get(source_name, self.photo_grid)
+        return max(120, int((content - self.THUMB_GAP * n) / n))
 
     def _apply_thumb_columns(self):
         # Cap the columns at the chosen count; keep the minimum low so a narrow
         # window drops columns instead of forcing the grid (and window) wider.
         n = self._columns_for_thumb()
-        for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
+        for grid in self._photo_grids():
             grid.set_min_columns(2)
             grid.set_max_columns(n)
 
     def _resize_tiles(self):
-        """Re-square already-realised tiles to the grid's real column width,
-        without rebuilding the stores (so scroll and selection are kept). Run
-        from an idle after a width change so the grid is freshly laid out."""
-        for grid in (self.photo_grid, self.fav_grid, self.detail_photos_grid):
-            size = self._cell_px(grid)
+        """Re-size already-realised tiles when the width changes (resize, panel
+        open/close) without rebuilding the stores, so scroll and selection are
+        kept."""
+        size = self._cell_px()
+        for grid in self._photo_grids():
             stack = [grid]
             while stack:
                 w = stack.pop()
@@ -462,8 +460,6 @@ class EaselWindow(Adw.ApplicationWindow):
         return False  # usable as a GLib.idle_add callback
 
     def _schedule_resize_tiles(self):
-        # After a width change the grid re-lays-out on the next frame; read its
-        # real width on the following idle so tiles are sized exactly.
         GLib.idle_add(self._resize_tiles)
 
     def _on_realize(self, *_args):
@@ -697,17 +693,20 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _make_tile(self):
         # 1px margins → a 2px gap between neighbouring tiles.
+        # A 1px trailing margin on the right/bottom is the only gap between
+        # thumbnails, so neighbours sit 1px apart (the grid's own margin bounds
+        # the outer edges).
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                      margin_top=1, margin_bottom=1, margin_start=1, margin_end=1)
+                      margin_end=self.THUMB_GAP, margin_bottom=self.THUMB_GAP)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
         # Fills its grid cell (width from the column, height pinned to the same
-        # size) so tiles are squares that touch with just the 2px margin gap and
-        # every row is the same height.
-        swatch = Swatch("", size=self._cell_px(self.photo_grid))
-        swatch.add_css_class("card-swatch")
+        # size) so tiles are squares that every row shares — sharp-cornered,
+        # cover-cropped 1:1.
+        swatch = Swatch("", size=self._cell_px())
+        swatch.add_css_class("photo-tile")
         swatch.set_fill(True)
         overlay.set_child(swatch)
 
@@ -788,7 +787,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_item_id = photo.id
         tile._menu_entries = PHOTO_ENTRIES
         tile._menu_extra = {}
-        tile.swatch.set_size(self._cell_px(self._grid_for_source(source_name)))
+        tile.swatch.set_size(self._cell_px())
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
@@ -909,7 +908,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
         swatch = Swatch("", size=192)
-        swatch.add_css_class("card-swatch")
+        swatch.add_css_class("card-cover")
 
         text_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
@@ -1029,7 +1028,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
         swatch = Swatch("", size=192)
-        swatch.add_css_class("card-swatch")
+        swatch.add_css_class("card-cover")
         title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
         subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
         box.append(swatch)
@@ -2652,8 +2651,7 @@ class EaselWindow(Adw.ApplicationWindow):
         person = item.get_item()
         box = item.get_child()
         if not hasattr(box, "swatch"):
-            box = self._album_card_widget()
-            box.swatch.add_css_class("person-swatch")
+            box = self._album_card_widget()  # same card, cover styled by .card-cover
             item.set_child(box)
         box.swatch.set_placeholder("person")
         box.swatch.set_path(person.cover_path or None)
