@@ -852,19 +852,23 @@ class Swatch(Gtk.Widget):
         self.set_path(None)
 
     def set_fill(self, fill):
-        """Fill mode (photo grid tiles): the width may shrink to whatever the
-        grid column gives it — its *minimum* width is 0, so a row of tiles never
-        forces the window wider (which loops with a no-horizontal-scroll grid).
-        The height stays pinned to the set size, so with the size kept equal to
-        the column width the tile is a square that fills its cell. Covers and
-        previews leave this off and stay a fixed square."""
+        """Fill mode (photo tiles and card covers): the width shrinks to
+        whatever the grid column / card gives it (minimum 0, so it never forces
+        the window wider), and the *height follows the width* — a true square
+        that fills its cell whatever width it's handed. Because height tracks
+        the actual allocated width, every cell in a row ends up the same height,
+        so there are no stray row gaps. Covers/previews that leave this off stay
+        a fixed square."""
         if fill != self._fill:
             self._fill = fill
             self.queue_resize()
 
     def do_measure(self, orientation, for_size):
-        if self._fill and orientation == Gtk.Orientation.HORIZONTAL:
-            return (0, self._size, -1, -1)
+        if self._fill:
+            if orientation == Gtk.Orientation.HORIZONTAL:
+                return (0, self._size, -1, -1)   # shrinkable; natural = size hint
+            side = for_size if for_size > 0 else self._size  # height-for-width: square
+            return (side, side, -1, -1)
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):

@@ -230,7 +230,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_photo_id = None
         self._info_preview = None
         self._selected_tile = None
-        self._single_click_source = 0
 
         self._lightbox_photos = []
         self._lightbox_index = 0
@@ -820,33 +819,19 @@ class EaselWindow(Adw.ApplicationWindow):
                     return
                 picked = picked.get_parent()
         if n_press >= 2:
-            if self._single_click_source:
-                GLib.source_remove(self._single_click_source)
-                self._single_click_source = 0
             source = self._source_for(tile._source)
             ids = [p.id for p in source]
             index = ids.index(photo.id) if photo.id in ids else 0
             self._open_lightbox(source if source else [photo], index)
         elif n_press == 1:
-            if self._single_click_source:
-                GLib.source_remove(self._single_click_source)
-                self._single_click_source = 0
-            # Clicking a photo (even the already-open one) keeps the panel open
-            # and re-selects it — it is NOT a toggle. Closing the panel is the
-            # close button's job. A re-click that closed the panel made a
-            # double-click-to-open flicker (close, then open the lightbox).
-            if (self._info_photo_id == photo.id
+            # Open the info panel immediately (no double-click debounce, which
+            # made the panel feel laggy). Clicking a photo — even the open one —
+            # keeps the panel open and re-selects it; closing is the close
+            # button's job. A double-click still opens the lightbox on top.
+            self._select_tile(tile)
+            if not (self._info_photo_id == photo.id
                     and self.info_revealer.get_reveal_child()):
-                self._select_tile(tile)
-                return
-            self._select_tile(tile)  # instant highlight; info opens after the tap window
-            pid = photo.id
-            self._single_click_source = GLib.timeout_add(230, lambda: self._single_fire(pid))
-
-    def _single_fire(self, photo_id):
-        self._single_click_source = 0
-        self._show_info(photo_id)
-        return False
+                self._show_info(photo.id)
 
     def _select_tile(self, tile):
         """Move the blue selection ring to `tile` (or clear it with None)."""
@@ -909,6 +894,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box.add_css_class("card-box")
         swatch = Swatch("", size=192)
         swatch.add_css_class("card-cover")
+        swatch.set_fill(True)  # fill the card width and stay square (1:1)
 
         text_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
@@ -1029,6 +1015,7 @@ class EaselWindow(Adw.ApplicationWindow):
         box.add_css_class("card-box")
         swatch = Swatch("", size=192)
         swatch.add_css_class("card-cover")
+        swatch.set_fill(True)  # fill the card width and stay square (1:1)
         title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
         subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
         box.append(swatch)
@@ -2502,7 +2489,12 @@ class EaselWindow(Adw.ApplicationWindow):
         if action:
             action.set_state(GLib.Variant("s", self._sort[group]))
 
-    def _select_tab(self, name):
+    def _select_tab(self, name, close_panel=True):
+        # Switching tabs drops any selected photo and closes the info panel
+        # (internal re-renders pass close_panel=False so a background reload
+        # doesn't yank an open panel away).
+        if close_panel and self.info_revealer.get_reveal_child():
+            self._close_info()
         self.view = name
         self._last_tab = name
         if not self._photos_all and name in ("all_photos", "months", "years", "favourites"):
@@ -2803,6 +2795,6 @@ class EaselWindow(Adw.ApplicationWindow):
         if self.view == "detail" and self._detail_source is not None:
             self._render_detail()
         elif self.view in VIEW_NAMES:
-            self._select_tab(self.view)
+            self._select_tab(self.view, close_panel=False)
         self._schedule_resize_tiles()
         return False
