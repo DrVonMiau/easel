@@ -157,6 +157,7 @@ class EaselWindow(Adw.ApplicationWindow):
     detail_hero_slot = Gtk.Template.Child()
     detail_name_label = Gtk.Template.Child()
     detail_stats_label = Gtk.Template.Child()
+    detail_folders_grid = Gtk.Template.Child()
     detail_photos_grid = Gtk.Template.Child()
 
     info_revealer = Gtk.Template.Child()
