@@ -43,7 +43,7 @@
 			<description>
 				<p>Places and people.</p>
 				<ul>
-					<li>A Map view that places your photos by the GPS location in their metadata, on a zoomable offline world map (land, lakes and country borders) — no network needed; OpenStreetMap is optional in Preferences</li>
+					<li>A Map view that places your photos by the GPS location in their metadata, on a zoomable offline world map (land, lakes and country borders) — no network needed</li>
 					<li>Photos from the same place gather into one pin with a count; click it to open them all</li>
 					<li>People: tag someone by name right on a photo, then browse every photo they're in</li>
 				</ul>

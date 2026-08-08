@@ -203,13 +203,6 @@ class EaselWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
         self.con = lib.connect()
         self.settings = Gio.Settings.new(APP_ID)
-        # One-time: the map now defaults to the offline vector map, because
-        # streaming OpenStreetMap tiles needs an image loader (glycin) that
-        # fails in some sandboxes. Flip the old online default once; users can
-        # still choose OpenStreetMap in Preferences afterwards.
-        if not self.settings.get_boolean("map-offline-migrated"):
-            self.settings.set_boolean("map-offline", True)
-            self.settings.set_boolean("map-offline-migrated", True)
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
@@ -677,73 +670,12 @@ class EaselWindow(Adw.ApplicationWindow):
         self._setup_grid_sizing()
 
     def _setup_map(self):
-        # A slim banner tells people the map can run offline; the actual choice
-        # lives in Preferences (the "Offline map" switch). map_slot is a
-        # vertical box: banner on top, the map widget below.
-        self._map_banner = self._build_map_banner()
-        self.map_slot.append(self._map_banner)
-        self._map_view = None
-        self._build_map_widget()
-        self._update_map_banner()
-        for key in ("map-offline", "map-banner-dismissed"):
-            self.settings.connect(f"changed::{key}", lambda *_a: self._on_map_mode_changed())
-
-    def _build_map_widget(self):
-        """Create the map widget for the current mode and put it in the slot.
-        Online = a real OpenStreetMap (libshumate); offline = the built-in
-        vector map. If the online map can't be built, fall back to offline so
-        the Map view always works."""
-        offline = self.settings.get_boolean("map-offline")
-        widget = None
-        if not offline:
-            try:
-                from .shumate_map import ShumateMap
-                widget = ShumateMap()
-            except Exception as exc:  # ImportError, or any Shumate failure
-                print(f"[easel] OpenStreetMap unavailable ({exc}); using offline map",
-                      file=sys.stderr)
-        if widget is None:
-            widget = MapView()
-        widget.set_activate_cb(self._on_map_pin)
-        self._map_view = widget
-        self.map_slot.append(widget)
-
-    def _on_map_mode_changed(self):
-        if self._map_view is not None:
-            self.map_slot.remove(self._map_view)
-            self._map_view = None
-        self._build_map_widget()
-        self._update_map_banner()
-        if self.view == "map":
-            self._render_map()
-
-    def _build_map_banner(self):
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
-                      css_classes=["map-banner"])
-        bar.append(Gtk.Label(
-            label="This map streams OpenStreetMap tiles. It can also run "
-                  "offline, with less detail.",
-            xalign=0, hexpand=True, wrap=True, css_classes=["map-banner-text"]))
-        use_offline = Gtk.Button(label="Use offline map",
-                                 css_classes=["flat", "map-banner-btn"])
-        use_offline.set_cursor(POINTER_CURSOR)
-        use_offline.connect(
-            "clicked", lambda *_: self.settings.set_boolean("map-offline", True))
-        bar.append(use_offline)
-        close = Gtk.Button(icon_name="easel-x-symbolic", tooltip_text="Dismiss",
-                           css_classes=["flat", "map-banner-close"])
-        close.set_cursor(POINTER_CURSOR)
-        close.connect(
-            "clicked", lambda *_: self.settings.set_boolean("map-banner-dismissed", True))
-        bar.append(close)
-        return bar
-
-    def _update_map_banner(self):
-        # Only worth showing while online (to point at the offline option) and
-        # until the user dismisses it.
-        offline = self.settings.get_boolean("map-offline")
-        dismissed = self.settings.get_boolean("map-banner-dismissed")
-        self._map_banner.set_visible(not offline and not dismissed)
+        # Easel's map is the built-in offline vector map: no tiles, no network,
+        # no image decoding (all of which are unreliable in the sandbox). It's
+        # the only map, so there's nothing to configure here.
+        self._map_view = MapView()
+        self._map_view.set_activate_cb(self._on_map_pin)
+        self.map_slot.append(self._map_view)
 
     def _on_period_activated(self, gridview, position):
         period = gridview.get_model().get_item(position)
@@ -2447,16 +2379,6 @@ class EaselWindow(Adw.ApplicationWindow):
         theme_row.connect("notify::selected", on_theme_selected)
         appearance.add(theme_row)
         page.add(appearance)
-
-        map_group = Adw.PreferencesGroup(title="Map")
-        map_row = Adw.SwitchRow(
-            title="Offline map",
-            subtitle="Draw a simple built-in map instead of streaming "
-                     "OpenStreetMap tiles. No network; less detail.")
-        self.settings.bind("map-offline", map_row, "active",
-                           Gio.SettingsBindFlags.DEFAULT)
-        map_group.add(map_row)
-        page.add(map_group)
 
         folders = Adw.PreferencesGroup(title="Photo Folders",
                                        description="Folders Easel scans for photos")
