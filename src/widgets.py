@@ -11,7 +11,7 @@ import os
 import sys
 from collections import OrderedDict
 
-from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk
+from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk, Pango
 
 from . import worldmap
 
@@ -955,6 +955,14 @@ _MAP_SEA = _rgba(0xA8 / 255, 0xD5 / 255, 0xE2 / 255, 1.0)
 _MAP_LAND = _rgba(0xCC / 255, 0xE6 / 255, 0xA6 / 255, 1.0)
 _MAP_COAST = _rgba(0x6E / 255, 0x8E / 255, 0x63 / 255, 0.8)
 _MAP_BORDER = _rgba(0x7A / 255, 0x84 / 255, 0x6A / 255, 0.55)
+# Rivers read as water (a touch deeper than the sea so they show on land);
+# roads are a faint warm line that only appears when you zoom in; city dots
+# and labels are a muted ink with a soft light halo for legibility on land.
+_MAP_RIVER = _rgba(0x5B / 255, 0x9F / 255, 0xC4 / 255, 0.9)
+_MAP_ROAD = _rgba(0xC8 / 255, 0x8A / 255, 0x55 / 255, 0.7)
+_MAP_CITY = _rgba(0x3A / 255, 0x3F / 255, 0x4A / 255, 0.95)
+_MAP_CITY_HALO = _rgba(1.0, 1.0, 1.0, 0.85)
+_MAP_LABEL = _rgba(0x2B / 255, 0x30 / 255, 0x3A / 255, 1.0)
 
 
 class MapView(Gtk.Widget):
@@ -995,10 +1003,14 @@ class MapView(Gtk.Widget):
         self._drag_origin = None
         self._zoom_start = 1.0
         self._geo = None            # cached rings/lines from worldmap
+        self._cities = None         # cached (lon, lat, rank, name) list
         self._path_key = None       # world size the paths were built for
         self._land_path = None
         self._lake_path = None
         self._border_path = None
+        self._river_path = None
+        self._road_path = None
+        self._city_font_desc = None
         self._thumbs = {}           # path -> cover thumbnail texture
         self._thumb_pending = set()
         self.set_hexpand(True)
@@ -1174,19 +1186,21 @@ class MapView(Gtk.Widget):
     def _load_geo(self):
         if self._geo is None:
             self._geo = (worldmap.land_rings(), worldmap.lake_rings(),
-                         worldmap.border_lines())
+                         worldmap.border_lines(), worldmap.river_lines(),
+                         worldmap.road_lines())
+            self._cities = worldmap.cities()
         return self._geo
 
     def _ensure_paths(self):
-        """Build the land/lake/border paths in *content* space (world pixels at
-        the current zoom, independent of pan) and cache them by world size, so
+        """Build the vector paths in *content* space (world pixels at the
+        current zoom, independent of pan) and cache them by world size, so
         panning reuses them and only a zoom change rebuilds."""
         ww, wh = self._world_size()
         key = round(ww, 1)
         if key == self._path_key:
             return
         self._path_key = key
-        land, lakes, borders = self._load_geo()
+        land, lakes, borders, rivers, roads = self._load_geo()
 
         def build(items, closed):
             b = Gsk.PathBuilder()
@@ -1207,6 +1221,8 @@ class MapView(Gtk.Widget):
         self._land_path = build(land, True)
         self._lake_path = build(lakes, True)
         self._border_path = build(borders, False)
+        self._river_path = build(rivers, False)
+        self._road_path = build(roads, False)
 
     # ---- painting ----
 
@@ -1238,10 +1254,19 @@ class MapView(Gtk.Widget):
         # back in the sea colour, then coastline + country borders stroked.
         snapshot.append_fill(self._land_path, Gsk.FillRule.EVEN_ODD, _MAP_LAND)
         snapshot.append_fill(self._lake_path, Gsk.FillRule.EVEN_ODD, _MAP_SEA)
+        # Roads first (faint, and only once zoomed past the world overview so
+        # they add local context without cluttering), then rivers, then the
+        # coastline and country borders on top.
+        if self._zoom >= 5.0:
+            snapshot.append_stroke(self._road_path, Gsk.Stroke.new(0.7), _MAP_ROAD)
+        snapshot.append_stroke(self._river_path, Gsk.Stroke.new(0.6), _MAP_RIVER)
         snapshot.append_stroke(self._land_path, Gsk.Stroke.new(0.8), _MAP_COAST)
         snapshot.append_stroke(self._border_path, Gsk.Stroke.new(0.6), _MAP_BORDER)
         snapshot.restore()
         snapshot.pop()  # bounds clip
+
+        # City dots and labels, revealed progressively as you zoom in.
+        self._draw_cities(snapshot, w, h)
 
         # Photo-thumbnail markers (Apple Photos style).
         self._ensure_clusters()
@@ -1283,6 +1308,54 @@ class MapView(Gtk.Widget):
             self._thumbs[path] = texture
             self.queue_draw()
         return False
+
+    # Progressive reveal: a city's dot, and later its label, appear once you've
+    # zoomed past these levels, indexed by rank (0 = most major, capped at 4).
+    _CITY_DOT_ZOOM = (1.0, 1.0, 2.0, 4.0, 7.0)
+    _CITY_LABEL_ZOOM = (2.5, 2.5, 4.5, 7.0, 11.0)
+
+    def _city_font(self):
+        if self._city_font_desc is None:
+            fd = Pango.FontDescription()
+            fd.set_family("IBM Plex Sans")
+            fd.set_size(9 * Pango.SCALE)
+            self._city_font_desc = fd
+        return self._city_font_desc
+
+    def _draw_cities(self, snapshot, w, h):
+        self._load_geo()
+        if not self._cities:
+            return
+        zoom = self._zoom
+        last = len(self._CITY_DOT_ZOOM) - 1
+        for lon, lat, rank, name in self._cities:
+            r = min(rank, last)
+            if zoom < self._CITY_DOT_ZOOM[r]:
+                continue
+            px, py = self._project(lon, lat)
+            if px < -4 or px > w + 4 or py < -4 or py > h + 4:
+                continue
+            self._circle(snapshot, px, py, 3.0, _MAP_CITY_HALO)
+            self._circle(snapshot, px, py, 2.0, _MAP_CITY)
+            if zoom < self._CITY_LABEL_ZOOM[r]:
+                continue
+            layout = self.create_pango_layout(name)
+            layout.set_font_description(self._city_font())
+            try:
+                _ink, logical = layout.get_pixel_extents()
+                th = logical.height
+            except Exception:
+                th = 10
+            lx, ly = px + 5.0, py - th / 2.0
+            # A 1px light halo makes the label legible over the green land.
+            snapshot.save()
+            snapshot.translate(Graphene.Point().init(lx + 0.7, ly + 0.7))
+            snapshot.append_layout(layout, _MAP_CITY_HALO)
+            snapshot.restore()
+            snapshot.save()
+            snapshot.translate(Graphene.Point().init(lx, ly))
+            snapshot.append_layout(layout, _MAP_LABEL)
+            snapshot.restore()
 
     def _draw_marker(self, snapshot, cx, cy, cluster, hover):
         size = self._MARKER + (6.0 if hover else 0.0)
