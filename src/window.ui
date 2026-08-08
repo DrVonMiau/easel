@@ -252,18 +252,6 @@
               </object>
             </child>
             <child>
-              <object class="GtkMenuButton" id="sort_btn">
-                <property name="icon-name">easel-sort-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Sort</property>
-                <property name="valign">center</property>
-                <style>
-                  <class name="flat"/>
-                  <class name="circular"/>
-                  <class name="titlebar-icon"/>
-                </style>
-              </object>
-            </child>
-            <child>
               <object class="GtkToggleButton" id="search_toggle_btn">
                 <property name="tooltip-text" translatable="yes">Search</property>
                 <property name="valign">center</property>

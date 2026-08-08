@@ -67,11 +67,6 @@ SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
 POINTER_CURSOR = Gdk.Cursor.new_from_name("pointer")
 
-SORT_OPTIONS = {
-    "photos": [("Newest", "date"), ("Oldest", "date-asc")],
-    "albums": [("Name", "name"), ("Newest", "date"), ("Photos", "count")],
-}
-SORT_GROUP_FOR_TAB = {"all_photos": "photos", "favourites": "photos", "albums": "albums"}
 
 
 def _fmt_date(ts):
@@ -122,7 +117,6 @@ class EaselWindow(Adw.ApplicationWindow):
     root_box = Gtk.Template.Child()
     content_row = Gtk.Template.Child()
     search_toggle_btn = Gtk.Template.Child()
-    sort_btn = Gtk.Template.Child()
     nav_row = Gtk.Template.Child()
     titlebar_box = Gtk.Template.Child()
     titlebar_spacer = Gtk.Template.Child()
@@ -243,12 +237,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._crop_backup = None
         self._applied_crop = None
 
-        self._sort = {group: self.settings.get_string(f"sort-{group}")
-                      for group in SORT_OPTIONS}
-        # Photos used to offer a "name" sort; fall back to newest if that's what
-        # was saved, so the (now Newest/Oldest) menu has a valid selection.
-        if self._sort["photos"] not in ("date", "date-asc"):
-            self._sort["photos"] = "date"
 
         self._tab_buttons = {
             "all_photos": self.tab_all_photos,
@@ -609,11 +597,6 @@ class EaselWindow(Adw.ApplicationWindow):
         key_ctl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         key_ctl.connect("key-pressed", self._on_key_pressed)
         self.add_controller(key_ctl)
-
-        sort_mode = Gio.SimpleAction.new_stateful(
-            "sort-mode", GLib.VariantType.new("s"), GLib.Variant("s", self._sort["photos"]))
-        sort_mode.connect("activate", self._on_sort_mode)
-        self.add_action(sort_mode)
 
         show_hidden = Gio.SimpleAction.new_stateful(
             "show-hidden", None, GLib.Variant("b", self._show_hidden))
@@ -2572,33 +2555,6 @@ class EaselWindow(Adw.ApplicationWindow):
         action.set_state(GLib.Variant("b", self._show_hidden))
         self._reload_all()
 
-    def _on_sort_mode(self, action, param):
-        group = SORT_GROUP_FOR_TAB.get(self.view)
-        if not group:
-            return
-        mode = param.get_string()
-        action.set_state(param)
-        self._sort[group] = mode
-        self.settings.set_string(f"sort-{group}", mode)
-        self._apply_filters()
-
-    def _update_sort_button(self):
-        group = SORT_GROUP_FOR_TAB.get(self.view)
-        self.sort_btn.set_visible(group is not None)
-        if group is None:
-            return
-        menu = Gio.Menu()
-        section = Gio.Menu()
-        for label, mode in SORT_OPTIONS[group]:
-            item = Gio.MenuItem.new(label, None)
-            item.set_action_and_target_value("win.sort-mode", GLib.Variant("s", mode))
-            section.append_item(item)
-        menu.append_section("Sort by", section)
-        self.sort_btn.set_menu_model(menu)
-        action = self.lookup_action("sort-mode")
-        if action:
-            action.set_state(GLib.Variant("s", self._sort[group]))
-
     def _select_tab(self, name, close_panel=True):
         # Switching tabs drops any selected photo and closes the info panel
         # (internal re-renders pass close_panel=False so a background reload
@@ -2620,7 +2576,6 @@ class EaselWindow(Adw.ApplicationWindow):
             elif name == "people":
                 self._render_people()
         self.detail_back_row.set_visible(False)
-        self._update_sort_button()
         for key, btn in self._tab_buttons.items():
             if key == name:
                 btn.add_css_class("tab-active")
@@ -2655,7 +2610,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._detail_source = source
         self.paper_stack.set_visible_child_name("detail")
         self.detail_back_row.set_visible(True)
-        self.sort_btn.set_visible(False)
         self._render_detail()
 
     def _go_back(self):
@@ -2863,17 +2817,15 @@ class EaselWindow(Adw.ApplicationWindow):
         self._search_query = entry.get_text().strip().lower()
         self._apply_filters()
 
-    def _sorted_photos(self, photos):
-        if self._sort["photos"] == "date-asc":
-            return sorted(photos, key=lambda p: p.date_taken)
+    @staticmethod
+    def _sorted_photos(photos):
+        # Always newest first — the one order that makes sense for a photo
+        # library, so there's no sort control to fuss with.
         return sorted(photos, key=lambda p: -p.date_taken)
 
-    def _sorted_albums(self, albums):
-        mode = self._sort["albums"]
-        if mode == "date":
-            return sorted(albums, key=lambda a: -a.date_taken)
-        if mode == "count":
-            return sorted(albums, key=lambda a: (-a.photo_count, a.title.lower()))
+    @staticmethod
+    def _sorted_albums(albums):
+        # Folders and albums read best by name.
         return sorted(albums, key=lambda a: a.title.lower())
 
     def _photo_datetext(self, p):
