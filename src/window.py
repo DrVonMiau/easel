@@ -1030,9 +1030,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._fill_period_store(self.years_store, self._compute_periods("year"))
 
     def _fill_period_store(self, store, periods):
-        store.remove_all()
-        for period in periods:
-            store.append(period)
+        self._fill_store(store, periods)
 
     def _bind_period_card(self, item):
         period = item.get_item()
@@ -2743,9 +2741,7 @@ class EaselWindow(Adw.ApplicationWindow):
                 k = len(subfolders)
                 parts.append(f"{k} folder{'s' if k != 1 else ''}")
             self.detail_stats_label.set_label(" · ".join(parts))
-            self.detail_store.remove_all()
-            for p in self._detail_photos:
-                self.detail_store.append(p)
+            self._fill_store(self.detail_store, self._detail_photos)
             self._schedule_resize_tiles()
             return
         elif source[0] == "person":
@@ -2783,9 +2779,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_stats_label.set_label(" · ".join(parts))
 
         self._detail_photos = photos
-        self.detail_store.remove_all()
-        for p in self._detail_photos:
-            self.detail_store.append(p)
+        self._fill_store(self.detail_store, self._detail_photos)
         self._schedule_resize_tiles()
 
     def _folder_child_items(self, node):
@@ -2801,9 +2795,7 @@ class EaselWindow(Adw.ApplicationWindow):
         return items
 
     def _render_subfolders(self, items):
-        self.detail_folders_store.remove_all()
-        for it in items:
-            self.detail_folders_store.append(it)
+        self._fill_store(self.detail_folders_store, items)
         self.detail_folders_grid.set_visible(bool(items))
 
     # ---------- map view ----------
@@ -2843,9 +2835,7 @@ class EaselWindow(Adw.ApplicationWindow):
     # ---------- people view ----------
 
     def _render_people(self):
-        self.people_store.remove_all()
-        for person in self._persons_all:
-            self.people_store.append(person)
+        self._fill_store(self.people_store, self._persons_all)
         self.people_stack.set_visible_child_name(
             "view" if self._persons_all else "empty")
 
@@ -2924,24 +2914,26 @@ class EaselWindow(Adw.ApplicationWindow):
         # Date: year / month name.
         return q in self._photo_datetext(p)
 
+    @staticmethod
+    def _fill_store(store, items):
+        # One splice instead of N appends: the model emits a single
+        # items-changed, so the grid updates once even for thousands of photos
+        # (per-item appends made loading a big library crawl).
+        store.splice(0, store.get_n_items(), list(items))
+
     def _apply_filters(self):
         q = self._search_query
 
         self._visible_photos = [p for p in self._sorted_photos(self._photos_all)
                                 if self._photo_matches(p, q)]
-        self.photo_store.remove_all()
-        for p in self._visible_photos:
-            self.photo_store.append(p)
+        self._fill_store(self.photo_store, self._visible_photos)
 
-        self.album_store.remove_all()
-        for a in self._sorted_albums(self._albums_all):
-            if not q or q in a.title.lower():
-                self.album_store.append(a)
+        albums = [a for a in self._sorted_albums(self._albums_all)
+                  if not q or q in a.title.lower()]
+        self._fill_store(self.album_store, albums)
 
         self._visible_favs = [p for p in self._visible_photos if p.favorite]
-        self.fav_store.remove_all()
-        for p in self._visible_favs:
-            self.fav_store.append(p)
+        self._fill_store(self.fav_store, self._visible_favs)
 
     # ---------- library loading ----------
 

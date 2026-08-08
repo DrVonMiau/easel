@@ -9,6 +9,7 @@ import hashlib
 import math
 import os
 import sys
+import time
 from collections import OrderedDict
 
 from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk, Pango
@@ -74,7 +75,11 @@ def _thumb_cache_file(path, dim, rotation, mtime):
 # into view) decode first. Processed on the main thread via an idle handler.
 _load_stack = []
 _load_idle_id = 0
-_LOAD_BATCH = 2  # decodes per idle cycle — small, so the UI stays responsive
+# Decode for up to this many seconds per idle cycle, then yield to the frame
+# clock. A time budget (rather than a fixed count) fills the visible grid as
+# fast as each machine allows while keeping scrolling smooth — a fixed small
+# count left fast machines needlessly slow and slow ones still janky.
+_LOAD_BUDGET = 0.010
 
 def _render_texture(texture, rotation=0, max_dim=None):
     """Return a new Gdk.Texture that is `texture` optionally rotated by a
@@ -180,8 +185,8 @@ def _decode_scaled(path, size, rotation=0):
 
 def _process_load_stack():
     global _load_idle_id
-    processed = 0
-    while _load_stack and processed < _LOAD_BATCH:
+    start = time.monotonic()
+    while _load_stack:
         path, size, rotation, key, wants, callback = _load_stack.pop()  # LIFO
         # Skip work the caller no longer wants (tile recycled / scrolled away)
         # so a big backlog never forces thousands of pointless decodes.
@@ -193,7 +198,10 @@ def _process_load_stack():
             if texture is not None:
                 _cache_put(key, texture)
         callback(path, texture)
-        processed += 1
+        # At least one decode runs per cycle; stop once the budget is spent so
+        # the frame clock gets a turn.
+        if time.monotonic() - start >= _LOAD_BUDGET:
+            break
     if _load_stack:
         return True  # keep the idle handler running
     _load_idle_id = 0
