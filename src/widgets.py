@@ -871,18 +871,27 @@ class Swatch(Gtk.Widget):
             self._fill = fill
             self.queue_resize()
 
+    def do_get_request_mode(self):
+        # Fill mode is height-for-width: declaring it is what makes GtkGridView
+        # actually ask for our height at the column width it allocates. Without
+        # this the widget defaults to constant-size and the grid never
+        # re-measures, so a fixed height drifts out of square with the real
+        # column width (scrollbar appearing, stack transitions) — the cause of
+        # "square in some albums, tall in others".
+        if self._fill:
+            return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+        return Gtk.SizeRequestMode.CONSTANT_SIZE
+
     def do_measure(self, orientation, for_size):
         if self._fill:
-            # Fill mode: the width may shrink to 0 so the swatch always fits its
-            # grid column (and never forces the window wider), while the height
-            # is fixed to _size. The window sets _size to the real column width
-            # (see EaselWindow._size_grid), so the cell is square by
-            # construction — we don't depend on GtkGridView re-measuring the
-            # height for the width it finally allocates (it doesn't do so
-            # dependably, which left tall rectangles in some views).
+            # Width may shrink to 0 so the swatch always fits its column (never
+            # forcing the window wider); the height is whatever width the cell
+            # is actually given, so the cell is square at any width, however the
+            # layout settles. _size is only a hint (column count + decode size).
             if orientation == Gtk.Orientation.HORIZONTAL:
-                return (0, self._size, -1, -1)   # shrinkable; natural = size hint
-            return (self._size, self._size, -1, -1)  # fixed square height
+                return (0, self._size, -1, -1)
+            side = for_size if for_size > 0 else self._size
+            return (side, side, -1, -1)
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):
