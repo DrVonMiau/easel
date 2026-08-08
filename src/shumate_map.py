@@ -14,13 +14,23 @@ of its photos in the lightbox.
 import gi
 
 gi.require_version("Shumate", "1.0")
-from gi.repository import Gtk, Shumate  # noqa: E402
+from gi.repository import GLib, Gtk, Shumate  # noqa: E402
 
 from .widgets import Swatch  # noqa: E402
 
 # The OSM "Mapnik" raster source id; fall back to the literal if the #define
 # isn't exposed as a constant in the introspection bindings.
 _OSM = getattr(Shumate, "MAP_SOURCE_OSM_MAPNIK", "osm-mapnik")
+
+# OpenStreetMap's tile policy asks clients to identify themselves; unidentified
+# requests get throttled, which shows up as blank tiles and retry jank. A clear
+# User-Agent keeps the tiles flowing.
+_USER_AGENT = "Easel/0.3 (+https://github.com/DrVonMiau/easel)"
+
+# Markers aren't virtualised, so building one thumbnail widget per location all
+# at once stalls the main thread when a library has many geotagged spots. We add
+# them a few per idle tick instead, so the map stays responsive as pins fill in.
+_MARKER_BATCH = 12
 
 
 class ShumateMap(Gtk.Box):
@@ -34,6 +44,7 @@ class ShumateMap(Gtk.Box):
         self.set_hexpand(True)
         self.set_vexpand(True)
         self._activate_cb = None
+        self._fill_id = 0  # pending incremental marker fill
 
         self._simple = Shumate.SimpleMap()
         self._simple.set_hexpand(True)
@@ -42,6 +53,7 @@ class ShumateMap(Gtk.Box):
         registry = Shumate.MapSourceRegistry.new_with_defaults()
         source = registry.get_by_id(_OSM)
         if source is not None:
+            self._set_user_agent(source)
             self._simple.set_map_source(source)
 
         self._map = self._simple.get_map()
@@ -57,11 +69,26 @@ class ShumateMap(Gtk.Box):
 
         self.append(self._simple)
 
+    @staticmethod
+    def _set_user_agent(source):
+        # The OSM source is a RasterRenderer backed by a TileDownloader, which
+        # carries the User-Agent. Reaching it isn't guaranteed across versions,
+        # so set it defensively — a miss just means the library default UA.
+        try:
+            ds = source.get_property("data-source")
+        except (TypeError, ValueError):
+            ds = None
+        if ds is not None and hasattr(ds, "set_user_agent"):
+            ds.set_user_agent(_USER_AGENT)
+
     def set_activate_cb(self, cb):
         self._activate_cb = cb
 
     def set_photos(self, entries):
         """entries: iterable of (lon, lat, photo)."""
+        if self._fill_id:
+            GLib.source_remove(self._fill_id)
+            self._fill_id = 0
         self._marker_layer.remove_all()
         # Group photos taken at essentially the same place (~110 m) so one spot
         # is one thumbnail.
@@ -70,16 +97,36 @@ class ShumateMap(Gtk.Box):
             key = (round(lat, 3), round(lon, 3))
             groups.setdefault(key, []).append((lat, lon, photo))
 
+        pins = []
         lats, lons = [], []
         for members in groups.values():
             mlat = sum(m[0] for m in members) / len(members)
             mlon = sum(m[1] for m in members) / len(members)
-            photos = [m[2] for m in members]
-            self._marker_layer.add_marker(self._make_marker(mlat, mlon, photos))
+            pins.append((mlat, mlon, [m[2] for m in members]))
             lats.append(mlat)
             lons.append(mlon)
+        # Centre first so the map looks right immediately, then drop the pins in
+        # over the next few idle ticks so opening the Map view never stalls.
         if lats:
             self._frame(lats, lons)
+        self._fill_markers(pins)
+
+    def _fill_markers(self, pins):
+        queue = list(pins)
+
+        def step():
+            if self.get_root() is None:  # widget detached (e.g. mode switch)
+                self._fill_id = 0
+                return False
+            for _ in range(_MARKER_BATCH):
+                if not queue:
+                    self._fill_id = 0
+                    return False
+                mlat, mlon, photos = queue.pop()
+                self._marker_layer.add_marker(self._make_marker(mlat, mlon, photos))
+            return True  # more pins to add
+
+        self._fill_id = GLib.idle_add(step)
 
     def _make_marker(self, lat, lon, photos):
         marker = Shumate.Marker()
