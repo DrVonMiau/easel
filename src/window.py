@@ -1282,16 +1282,55 @@ class EaselWindow(Adw.ApplicationWindow):
         row = lib.get_photo(self.con, photo_id)
         if not row:
             return
-        try:
-            Gio.File.new_for_path(row["path"]).trash(None)
-        except GLib.Error as err:
-            self._toast(f"Couldn’t move to Trash: {err.message}")
+        ok, err = self._trash_file(row["path"])
+        if not ok:
+            self._toast(f"Couldn’t move to Trash: {err}")
             return
         if self._info_photo_id == photo_id:
             self._close_info()
         lib.delete_photo(self.con, photo_id)
         self._reload_all()
         self._toast("Moved to Trash")
+
+    def _trash_file(self, path):
+        """Move a file to the system Trash, returning (ok, error_message).
+
+        Easel only has read-only access to the photo folders (see the Flatpak
+        manifest), so it can't move the file itself. The Trash portal does it
+        for us: it runs outside the sandbox with the user's own permissions, so
+        a read-only fd is enough to identify the file it should trash. We fall
+        back to Gio's direct trash for when Easel runs unsandboxed (developer
+        builds), where the portal may be absent."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+        except OSError as err:
+            return False, err.strerror
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            fd_list = Gio.UnixFDList.new()
+            handle = fd_list.append(fd)  # dups the fd; we still own ours
+            reply, _out = bus.call_with_unix_fd_list_sync(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Trash",
+                "TrashFile",
+                GLib.Variant("(h)", (handle,)),
+                GLib.VariantType.new("(u)"),
+                Gio.DBusCallFlags.NONE, -1, fd_list, None)
+            # The portal returns 1 on success, 0 on failure.
+            if reply.unpack()[0] == 1:
+                return True, None
+            portal_err = "the Trash portal declined"
+        except GLib.Error as err:
+            portal_err = err.message
+        finally:
+            os.close(fd)
+        # No portal (unsandboxed dev run): try Gio's own trash.
+        try:
+            Gio.File.new_for_path(path).trash(None)
+            return True, None
+        except GLib.Error as err:
+            return False, f"{portal_err}; {err.message}"
 
     def _confirm_delete(self, kind, item_id):
         if kind == "album":
