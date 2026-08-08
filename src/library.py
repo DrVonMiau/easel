@@ -5,6 +5,7 @@ folder it was scanned from) and can be added to any number of user-created
 albums on top of that — so album membership is many-to-many (album_photos).
 The folder-watching and pruning shape carries over from Lyre's music library.
 """
+import ctypes
 import os
 import struct
 import sqlite3
@@ -506,14 +507,69 @@ def write_png_with_exif(png_path, exif_tiff):
             pass
 
 
+# --- creation (birth) time -------------------------------------------------
+# Python's os.stat only exposes st_birthtime on macOS/BSD/Windows, never on
+# Linux — where we instead call the statx(2) syscall for STATX_BTIME. The statx
+# struct has a fixed, architecture-independent layout, so this ctypes mirror is
+# portable across Linux arches. Any failure falls back to None (→ mtime).
+_AT_FDCWD = -100
+_STATX_BTIME = 0x00000800
+
+
+class _StatxTimestamp(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_int64), ("tv_nsec", ctypes.c_uint32),
+                ("__reserved", ctypes.c_int32)]
+
+
+class _Statx(ctypes.Structure):
+    _fields_ = [
+        ("stx_mask", ctypes.c_uint32), ("stx_blksize", ctypes.c_uint32),
+        ("stx_attributes", ctypes.c_uint64),
+        ("stx_nlink", ctypes.c_uint32), ("stx_uid", ctypes.c_uint32),
+        ("stx_gid", ctypes.c_uint32), ("stx_mode", ctypes.c_uint16),
+        ("__spare0", ctypes.c_uint16),
+        ("stx_ino", ctypes.c_uint64), ("stx_size", ctypes.c_uint64),
+        ("stx_blocks", ctypes.c_uint64), ("stx_attributes_mask", ctypes.c_uint64),
+        ("stx_atime", _StatxTimestamp), ("stx_btime", _StatxTimestamp),
+        ("stx_ctime", _StatxTimestamp), ("stx_mtime", _StatxTimestamp),
+        ("stx_rdev_major", ctypes.c_uint32), ("stx_rdev_minor", ctypes.c_uint32),
+        ("stx_dev_major", ctypes.c_uint32), ("stx_dev_minor", ctypes.c_uint32),
+        ("stx_mnt_id", ctypes.c_uint64), ("__spare2", ctypes.c_uint64),
+        ("__spare3", ctypes.c_uint64 * 12),
+    ]
+
+
+_libc = None
+_statx_ok = True
+
+
+def _linux_btime(path):
+    global _libc, _statx_ok
+    if not _statx_ok:
+        return None
+    try:
+        if _libc is None:
+            _libc = ctypes.CDLL(None, use_errno=True)
+        buf = _Statx()
+        res = _libc.statx(_AT_FDCWD, os.fsencode(path), 0,
+                          _STATX_BTIME, ctypes.byref(buf))
+        if res == 0 and (buf.stx_mask & _STATX_BTIME) and buf.stx_btime.tv_sec > 0:
+            return float(buf.stx_btime.tv_sec)
+    except (OSError, AttributeError, ValueError):
+        _statx_ok = False  # no statx here; stop trying
+    return None
+
+
 def _file_created(path):
-    """Filesystem creation (birth) time if the platform exposes it, else None."""
+    """Filesystem creation (birth) time, or None if unavailable."""
     try:
         st = os.stat(path)
     except OSError:
         return None
-    bt = getattr(st, "st_birthtime", None)
-    return bt if bt else None
+    bt = getattr(st, "st_birthtime", None)  # macOS / BSD / Windows
+    if bt:
+        return bt
+    return _linux_btime(path)
 
 
 def _date_taken(path):

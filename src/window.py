@@ -465,7 +465,12 @@ class EaselWindow(Adw.ApplicationWindow):
             scroller = self._enclosing_scroller(grid)
             adj = scroller.get_hadjustment() if scroller is not None else None
             if adj is not None:
-                adj.connect("changed", lambda _a, g=grid: self._size_grid(g))
+                # Size on idle, not inline: "changed" fires while the scroller is
+                # allocating, before a grid nested in a box (the detail grids)
+                # gets its new width — reading it then gives a stale value and
+                # non-square rows. On idle the allocation has settled.
+                adj.connect("changed",
+                            lambda _a, g=grid: GLib.idle_add(self._size_grid, g))
 
     def _size_grid(self, grid):
         """Force exact columns and square swatches for one grid from its real
@@ -2517,7 +2522,10 @@ class EaselWindow(Adw.ApplicationWindow):
         if source and source[0] == "folder":
             node = (self._folder_nodes or {}).get(source[1])
             parent = node["parent"] if node else None
-            if parent and parent in self._folder_nodes:
+            # Climb to the parent folder — unless the parent is a watched root,
+            # which the Folders tab skips, so go back to that tab instead.
+            if (parent and parent in self._folder_nodes
+                    and parent not in self._folder_roots):
                 self._open_folder(parent)
                 return
             self._select_tab("folders")
@@ -2622,17 +2630,15 @@ class EaselWindow(Adw.ApplicationWindow):
         self._fill_store(self.detail_store, self._detail_photos)
         self._schedule_resize_tiles()
 
+    @staticmethod
+    def _folder_card(node):
+        return Album(id=node["album_id"] or 0, title=node["title"], path=node["path"],
+                     photo_count=node["total"], cover_path=node["cover"] or "",
+                     folder=True, subfolder_count=len(node["children"]))
+
     def _folder_child_items(self, node):
-        items = []
-        for child_path in node["children"]:
-            cn = self._folder_nodes.get(child_path)
-            if not cn:
-                continue
-            items.append(Album(id=cn["album_id"] or 0, title=cn["title"],
-                               path=cn["path"], photo_count=cn["total"],
-                               cover_path=cn["cover"] or "", folder=True,
-                               subfolder_count=len(cn["children"])))
-        return items
+        return [self._folder_card(self._folder_nodes[c]) for c in node["children"]
+                if c in self._folder_nodes]
 
     def _render_subfolders(self, items):
         self._fill_store(self.detail_folders_store, items)
@@ -2864,13 +2870,14 @@ class EaselWindow(Adw.ApplicationWindow):
         # card you drill into. The Albums view holds user-created albums, with
         # Favourites (and Hidden, when enabled) pinned first.
         self._folder_nodes, self._folder_roots = lib.folder_tree(self.con)
-        self._folder_cards = []
+        # Skip the root folder itself: the Folders tab shows the actual folders
+        # inside each watched root, so there's no pointless extra click. A root
+        # with no sub-folders (a flat library) is shown as-is.
+        top = []
         for path in self._folder_roots:
             node = self._folder_nodes[path]
-            self._folder_cards.append(Album(
-                id=node["album_id"] or 0, title=node["title"], path=node["path"],
-                photo_count=node["total"], cover_path=node["cover"] or "",
-                folder=True, subfolder_count=len(node["children"])))
+            top.extend(node["children"] or [path])
+        self._folder_cards = [self._folder_card(self._folder_nodes[p]) for p in top]
         self._user_albums = [
             Album(id=r["id"], title=r["title"], path="",
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",
