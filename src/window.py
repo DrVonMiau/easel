@@ -574,7 +574,6 @@ class EaselWindow(Adw.ApplicationWindow):
     def _setup_actions(self):
         for name, handler in (
             ("add-folder", lambda *_a: self._on_add_folder()),
-            ("add-photos", lambda *_a: self._on_add_photos()),
             ("rescan", lambda *_a: self._on_rescan()),
             ("new-album", lambda *_a: self._on_new_album()),
             ("preferences", lambda *_a: self._on_preferences()),
@@ -2385,8 +2384,9 @@ class EaselWindow(Adw.ApplicationWindow):
         for row in lib.all_folders(self.con):
             path = row["path"]
             folder_row = Adw.ActionRow(title=path, title_lines=1)
-            remove_btn = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                    tooltip_text="Remove folder from library", css_classes=["flat"])
+            remove_btn = Gtk.Button(icon_name="list-remove-symbolic", valign=Gtk.Align.CENTER,
+                                    tooltip_text="Disconnect this folder from Easel",
+                                    css_classes=["flat"])
             remove_btn.connect("clicked",
                                lambda _b, p=path, d=dialog: self._confirm_remove_folder(p, d))
             folder_row.add_suffix(remove_btn)
@@ -2402,8 +2402,11 @@ class EaselWindow(Adw.ApplicationWindow):
         folders.add(watch_row)
         page.add(folders)
 
-        danger = Adw.PreferencesGroup(title="Reset")
-        delete_row = Adw.ActionRow(title="Delete Library…", activatable=True)
+        danger = Adw.PreferencesGroup(
+            title="Reset",
+            description="Easel only reads your folders — disconnecting forgets "
+                        "them here but never deletes anything on disk.")
+        delete_row = Adw.ActionRow(title="Disconnect All Folders…", activatable=True)
         delete_row.add_css_class("error")
         delete_row.connect("activated", lambda *_: self._confirm_wipe_library(dialog))
         danger.add(delete_row)
@@ -2414,20 +2417,21 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _confirm_remove_folder(self, path, prefs_dialog):
         confirm = Adw.AlertDialog(
-            heading="Remove folder?",
-            body=f"Photos from “{path}” will be removed from your library. "
-                 "Files on disk are not touched.")
+            heading="Disconnect folder?",
+            body=f"Easel will stop showing photos from “{path}” and forget its "
+                 "favourites and people tags. The folder and your photos on disk "
+                 "are not touched — you can reconnect it any time.")
         confirm.add_response("cancel", "Cancel")
-        confirm.add_response("remove", "Remove")
-        confirm.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.add_response("disconnect", "Disconnect")
+        confirm.set_response_appearance("disconnect", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_response(_d, response):
-            if response != "remove":
+            if response != "disconnect":
                 return
             lib.remove_folder(self.con, path)
             self._reload_all()
             self._refresh_watchers()
-            self._toast("Folder removed")
+            self._toast("Folder disconnected")
             prefs_dialog.close()
 
         confirm.connect("response", on_response)
@@ -2435,21 +2439,22 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _confirm_wipe_library(self, prefs_dialog):
         confirm = Adw.AlertDialog(
-            heading="Delete entire library?",
-            body="All albums, photos and favourites will be erased from the "
-                 "library. Your photo files on disk are not touched.")
+            heading="Disconnect all folders?",
+            body="Easel will forget every folder you've added, along with all "
+                 "favourites and people tags. Your photo files on disk are not "
+                 "touched — nothing is deleted.")
         confirm.add_response("cancel", "Cancel")
-        confirm.add_response("delete", "Delete Library")
-        confirm.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.add_response("disconnect", "Disconnect All")
+        confirm.set_response_appearance("disconnect", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_response(_d, response):
-            if response != "delete":
+            if response != "disconnect":
                 return
             lib.wipe_library(self.con)
             self._close_info()
             self._reload_all()
             self._refresh_watchers()
-            self._toast("Library deleted")
+            self._toast("All folders disconnected")
             prefs_dialog.close()
 
         confirm.connect("response", on_response)
@@ -2479,25 +2484,6 @@ class EaselWindow(Adw.ApplicationWindow):
             return False
         self._import_paths(paths)
         return True
-
-    def _on_add_photos(self):
-        dialog = Gtk.FileDialog(title="Add Photos")
-        file_filter = Gtk.FileFilter()
-        file_filter.set_name("Images and videos")
-        for ext in sorted(lib.MEDIA_EXT):
-            file_filter.add_suffix(ext.lstrip("."))
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(file_filter)
-        dialog.set_filters(filters)
-        dialog.open_multiple(self, None, self._photos_chosen)
-
-    def _photos_chosen(self, dialog, result):
-        try:
-            files = dialog.open_multiple_finish(result)
-        except GLib.Error:
-            return
-        paths = [f.get_path() for f in files if f and f.get_path()]
-        self._import_paths(paths)
 
     def _import_paths(self, paths):
         """Index dropped/opened files: media files individually, folders as

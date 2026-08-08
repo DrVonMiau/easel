@@ -6,10 +6,6 @@
   <menu id="primary_menu">
     <section>
       <item>
-        <attribute name="label" translatable="yes">Add Photos…</attribute>
-        <attribute name="action">win.add-photos</attribute>
-      </item>
-      <item>
         <attribute name="label" translatable="yes">Add Photo Folder…</attribute>
         <attribute name="action">win.add-folder</attribute>
       </item>
