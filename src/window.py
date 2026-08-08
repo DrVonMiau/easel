@@ -448,41 +448,24 @@ class EaselWindow(Adw.ApplicationWindow):
         content = max(240, paper - 2 * self.GRID_MARGIN)
         return max(120, (content // max(1, n)) - gap)
 
-    @staticmethod
-    def _enclosing_scroller(widget):
-        # The grid may sit a couple of boxes down from its GtkScrolledWindow
-        # (the detail grid lives inside detail_box), so walk up to find it.
-        node = widget.get_parent()
-        while node is not None and not isinstance(node, Gtk.ScrolledWindow):
-            node = node.get_parent()
-        return node
-
     def _setup_grid_sizing(self):
-        # Re-size a grid whenever it is allocated a new width. Its enclosing
-        # GtkScrolledWindow's hadjustment emits "changed" on every allocation,
-        # which is our width-change hook.
+        # Every grid is an EaselGridView that hands us its real content width the
+        # instant it's allocated — the one reliable trigger (resize, panel
+        # toggle, scrollbar, stack transition), including for grids nested in a
+        # box. We size squares from that width.
         for grid in self._photo_grids() + self._card_grids():
-            scroller = self._enclosing_scroller(grid)
-            adj = scroller.get_hadjustment() if scroller is not None else None
-            if adj is not None:
-                # Size on idle, not inline: "changed" fires while the scroller is
-                # allocating, before a grid nested in a box (the detail grids)
-                # gets its new width — reading it then gives a stale value and
-                # non-square rows. On idle the allocation has settled.
-                adj.connect("changed",
-                            lambda _a, g=grid: GLib.idle_add(self._size_grid, g))
+            grid.set_width_cb(self._size_grid)
 
-    def _size_grid(self, grid):
+    def _size_grid(self, grid, width=None):
         """Force exact columns and square swatches for one grid from its real
-        width. A no-op until the grid has been allocated (width > 1); the
-        hadjustment "changed" signal re-invokes us once it has."""
-        w = grid.get_width()
+        content width (passed by EaselGridView on allocation, or read live)."""
+        w = width if width is not None else grid.get_width()
         if w <= 1:
             return
         if grid in self._photo_grids():
             n = max(1, min(self._MAX_COLS, self._columns_for_thumb()))
-            # A tile's swatch fills the column minus its trailing gap, so the
-            # height must equal exactly that width to stay square.
+            # A tile's swatch fills the column minus its trailing gap, so its
+            # fixed height must equal that width to stay square.
             cell = max(1, (w // n) - self.THUMB_GAP)
             self._photo_cell = cell
         else:
@@ -490,14 +473,18 @@ class EaselWindow(Adw.ApplicationWindow):
             # A card's cover fills the column minus the card's side margins.
             cell = max(1, (w // n) - 2 * self.CARD_MARGIN)
             self._card_cell = cell
-        # Only touch the column count when it actually changes: set_min/max
-        # queues a resize, so re-setting the same value on every "changed" would
-        # spin. With the count stable and swatch sizes converged, nothing else
-        # queues a resize and the layout settles.
+        # Applied on idle: this runs from within the grid's size-allocate, so
+        # changing columns / child sizes inline would re-enter layout. The
+        # captured (n, cell) are correct regardless of when the idle fires, and
+        # the guards below make a converged pass a no-op (no spin).
+        GLib.idle_add(self._apply_grid_size, grid, n, cell)
+
+    def _apply_grid_size(self, grid, n, cell):
         if grid.get_min_columns() != n or grid.get_max_columns() != n:
             grid.set_min_columns(n)
             grid.set_max_columns(n)
         self._resize_swatches(grid, cell)
+        return False
 
     @staticmethod
     def _resize_swatches(root, cell):

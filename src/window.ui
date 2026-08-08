@@ -335,7 +335,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="photo_grid">
+                              <object class="EaselGridView" id="photo_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">12</property>
                                 <property name="margin-top">24</property>
@@ -362,7 +362,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="folders_grid">
+                              <object class="EaselGridView" id="folders_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
@@ -390,7 +390,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="album_grid">
+                              <object class="EaselGridView" id="album_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
@@ -481,7 +481,7 @@
                                       <class name="om-scroll"/>
                                     </style>
                                     <property name="child">
-                                      <object class="GtkGridView" id="people_grid">
+                                      <object class="EaselGridView" id="people_grid">
                                         <property name="min-columns">2</property>
                                         <property name="max-columns">8</property>
                                         <property name="margin-top">24</property>
@@ -554,7 +554,7 @@
                                 </child>
 
                                 <child>
-                                  <object class="GtkGridView" id="detail_folders_grid">
+                                  <object class="EaselGridView" id="detail_folders_grid">
                                     <property name="visible">false</property>
                                     <property name="min-columns">2</property>
                                     <property name="max-columns">8</property>
@@ -569,7 +569,7 @@
                                 </child>
 
                                 <child>
-                                  <object class="GtkGridView" id="detail_photos_grid">
+                                  <object class="EaselGridView" id="detail_photos_grid">
                                     <property name="min-columns">2</property>
                                     <property name="max-columns">12</property>
                                     <property name="margin-top">24</property>

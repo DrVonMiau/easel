@@ -963,6 +963,34 @@ class CropOverlay(Gtk.Widget):
         self._drag_start = None
 
 
+class EaselGridView(Gtk.GridView):
+    """A GtkGridView that reports its real allocated content width the instant
+    it changes. GtkGridView sizes rows from a child's constant natural height
+    (it doesn't do height-for-width), so to get square cells the window must set
+    each swatch's fixed size to the true column width — and the only reliable
+    source of that width, across resizes, panel toggles, scrollbars and stack
+    transitions, is the widget's own size-allocate. Reading get_width() later
+    (e.g. from a scroll adjustment signal) gave stale values for grids nested in
+    a box, which left tall cells and big row gaps."""
+
+    __gtype_name__ = "EaselGridView"
+
+    # Class defaults so the widget works even when GtkBuilder instantiates it
+    # without calling Python __init__ (a known PyGObject gotcha).
+    _width_cb = None
+    _last_width = -1
+
+    def set_width_cb(self, cb):
+        self._width_cb = cb
+
+    def do_size_allocate(self, width, height, baseline):
+        Gtk.GridView.do_size_allocate(self, width, height, baseline)
+        if width != self._last_width:
+            self._last_width = width
+            if self._width_cb is not None:
+                self._width_cb(self, width)
+
+
 class Swatch(Gtk.Widget):
     """A square artwork swatch: draws the thumbnail texture (cover-cropped) when
     a path is set, otherwise a diagonal-striped placeholder.
@@ -996,27 +1024,15 @@ class Swatch(Gtk.Widget):
             self._fill = fill
             self.queue_resize()
 
-    def do_get_request_mode(self):
-        # Fill mode is height-for-width: declaring it is what makes GtkGridView
-        # actually ask for our height at the column width it allocates. Without
-        # this the widget defaults to constant-size and the grid never
-        # re-measures, so a fixed height drifts out of square with the real
-        # column width (scrollbar appearing, stack transitions) — the cause of
-        # "square in some albums, tall in others".
-        if self._fill:
-            return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
-        return Gtk.SizeRequestMode.CONSTANT_SIZE
-
     def do_measure(self, orientation, for_size):
-        if self._fill:
-            # Width may shrink to 0 so the swatch always fits its column (never
-            # forcing the window wider); the height is whatever width the cell
-            # is actually given, so the cell is square at any width, however the
-            # layout settles. _size is only a hint (column count + decode size).
-            if orientation == Gtk.Orientation.HORIZONTAL:
-                return (0, self._size, -1, -1)
-            side = for_size if for_size > 0 else self._size
-            return (side, side, -1, -1)
+        # Fill mode: width may shrink to 0 so the swatch always fits its column
+        # (never forcing the window wider); height is the fixed _size. GtkGridView
+        # doesn't do height-for-width — it takes the child's constant natural
+        # height as the row height — so the window sets _size to the grid's real
+        # column width (EaselGridView reports it on allocation) to keep cells
+        # square. Non-fill swatches are a plain fixed square.
+        if self._fill and orientation == Gtk.Orientation.HORIZONTAL:
+            return (0, self._size, -1, -1)
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):
