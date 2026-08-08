@@ -467,12 +467,21 @@ class EaselWindow(Adw.ApplicationWindow):
         content = max(240, paper - 2 * self.GRID_MARGIN)
         return max(120, (content // max(1, n)) - gap)
 
+    @staticmethod
+    def _enclosing_scroller(widget):
+        # The grid may sit a couple of boxes down from its GtkScrolledWindow
+        # (the detail grid lives inside detail_box), so walk up to find it.
+        node = widget.get_parent()
+        while node is not None and not isinstance(node, Gtk.ScrolledWindow):
+            node = node.get_parent()
+        return node
+
     def _setup_grid_sizing(self):
-        # Re-size a grid whenever it is allocated a new width. A GridView is the
-        # direct child of its GtkScrolledWindow; the scroller's hadjustment
-        # emits "changed" on every allocation, which is our width-change hook.
+        # Re-size a grid whenever it is allocated a new width. Its enclosing
+        # GtkScrolledWindow's hadjustment emits "changed" on every allocation,
+        # which is our width-change hook.
         for grid in self._photo_grids() + self._card_grids():
-            scroller = grid.get_parent()
+            scroller = self._enclosing_scroller(grid)
             adj = scroller.get_hadjustment() if scroller is not None else None
             if adj is not None:
                 adj.connect("changed", lambda _a, g=grid: self._size_grid(g))
