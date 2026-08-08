@@ -212,6 +212,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self._search_query = ""
         self._photos_all = []
         self._albums_all = []
+        self._user_albums = []
+        self._folder_nodes = {}    # path -> tree node (see lib.folder_tree)
+        self._folder_roots = []    # top-level folder paths
         self._persons_all = []
         self._photo_people = {}   # photo_id -> [names], for search
         self._map_view = None
@@ -433,7 +436,8 @@ class EaselWindow(Adw.ApplicationWindow):
         return (self.photo_grid, self.fav_grid, self.detail_photos_grid)
 
     def _card_grids(self):
-        return (self.album_grid, self.months_grid, self.years_grid, self.people_grid)
+        return (self.album_grid, self.detail_folders_grid,
+                self.months_grid, self.years_grid, self.people_grid)
 
     def _cell_px(self):
         """Best current square size for a photo tile — the last value computed
@@ -636,7 +640,16 @@ class EaselWindow(Adw.ApplicationWindow):
         self.album_grid.set_factory(self._factory(self._bind_album_card))
         self.album_grid.set_single_click_activate(True)
         self.album_grid.connect(
-            "activate", lambda g, p: self._open_album(g.get_model().get_item(p).id))
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
+
+        # Sub-folders shown at the top of a folder's detail page (the tree view).
+        self.detail_folders_store = Gio.ListStore(item_type=Album)
+        self.detail_folders_grid.set_model(
+            Gtk.SingleSelection(model=self.detail_folders_store))
+        self.detail_folders_grid.set_factory(self._factory(self._bind_album_card))
+        self.detail_folders_grid.set_single_click_activate(True)
+        self.detail_folders_grid.connect(
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
 
         self.fav_store = Gio.ListStore(item_type=Photo)
         self.fav_grid.set_model(Gtk.NoSelection(model=self.fav_store))
@@ -894,8 +907,18 @@ class EaselWindow(Adw.ApplicationWindow):
         box.swatch.set_path(album.cover_path or None)
         box.title.set_label(album.title)
         count = album.photo_count
-        box.subtitle.set_label(f"{count} photo{'s' if count != 1 else ''}")
-        self._attach_album_menu(box, album.id)
+        parts = [f"{count} photo{'s' if count != 1 else ''}"]
+        if album.folder and album.subfolder_count:
+            n = album.subfolder_count
+            parts.append(f"{n} folder{'s' if n != 1 else ''}")
+        box.subtitle.set_label(" · ".join(parts))
+        if album.folder:
+            # A directory node in the tree: no album rename/delete menu.
+            box._no_menu = True
+            box.menu_btn.set_visible(False)
+        else:
+            box._no_menu = False
+            self._attach_album_menu(box, album.id)
 
     def _album_card_widget(self):
         # No fixed width: the card fills its grid column (see _size_grid) and the
@@ -928,9 +951,11 @@ class EaselWindow(Adw.ApplicationWindow):
         box.append(text_row)
         box.swatch, box.title, box.subtitle, box.menu_btn = swatch, title, subtitle, menu_btn
         box._menu_open = False
+        box._no_menu = False   # folder-node cards set this to suppress the menu
 
         motion = Gtk.EventControllerMotion()
-        motion.connect("enter", lambda *_a: box.menu_btn.set_visible(True))
+        motion.connect("enter",
+                       lambda *_a: box.menu_btn.set_visible(not box._no_menu))
         motion.connect("leave",
                        lambda *_a: None if box._menu_open else box.menu_btn.set_visible(False))
         box.add_controller(motion)
@@ -948,6 +973,11 @@ class EaselWindow(Adw.ApplicationWindow):
             popover.connect("closed", on_closed)
 
         menu_btn.connect("clicked", on_menu_clicked)
+        # Right-click opens the same menu; folder-node cards (_no_menu) skip it.
+        gesture = Gtk.GestureClick(button=3)
+        gesture.connect("pressed", lambda _g, _n, x, y:
+                        None if box._no_menu else self._show_item_menu(box, box, x, y))
+        box.add_controller(gesture)
         return box
 
     def _attach_album_menu(self, box, album_id):
@@ -955,12 +985,6 @@ class EaselWindow(Adw.ApplicationWindow):
         box._menu_item_id = album_id
         box._menu_entries = ALBUM_ENTRIES
         box._menu_extra = {}
-        if getattr(box, "_album_menu_attached", False):
-            return
-        box._album_menu_attached = True
-        gesture = Gtk.GestureClick(button=3)
-        gesture.connect("pressed", lambda _g, _n, x, y: self._show_item_menu(box, box, x, y))
-        box.add_controller(gesture)
 
     # ---------- period views (Months / Years) ----------
 
@@ -1057,7 +1081,7 @@ class EaselWindow(Adw.ApplicationWindow):
                 continue
             if action == "__albums__":
                 sub = Gio.Menu()
-                for album in self._albums_all:
+                for album in self._user_albums:
                     mi = Gio.MenuItem.new(album.title, None)
                     mi.set_action_and_target_value("item.add-to-album", payload(album=album.id))
                     sub.append_item(mi)
@@ -2617,10 +2641,25 @@ class EaselWindow(Adw.ApplicationWindow):
             else:
                 btn.remove_css_class("tab-active")
 
+    def _activate_album_item(self, item):
+        """A card in the Albums grid (or a sub-folder card) was clicked: drill
+        into a folder node, or open a user-created album."""
+        if item is None:
+            return
+        if item.folder:
+            self._open_folder(item.path)
+        else:
+            self._open_album(item.id)
+
     def _open_album(self, album_id):
         if not lib.get_album(self.con, album_id):
             return
         self._open_detail(("album", album_id))
+
+    def _open_folder(self, path):
+        if path not in (self._folder_nodes or {}):
+            return
+        self._open_detail(("folder", path))
 
     def _open_period(self, kind, key, title):
         self._open_detail(("period", kind, key, title))
@@ -2634,6 +2673,17 @@ class EaselWindow(Adw.ApplicationWindow):
         self._render_detail()
 
     def _go_back(self):
+        # Inside the folder tree, "back" climbs to the parent folder; at a root
+        # (or any other detail) it returns to the tab you came from.
+        source = self._detail_source
+        if source and source[0] == "folder":
+            node = (self._folder_nodes or {}).get(source[1])
+            parent = node["parent"] if node else None
+            if parent and parent in self._folder_nodes:
+                self._open_folder(parent)
+                return
+            self._select_tab("albums")
+            return
         self._select_tab(self._last_tab if self._last_tab in VIEW_NAMES else "all_photos")
 
     def _clear_box(self, box):
@@ -2648,6 +2698,8 @@ class EaselWindow(Adw.ApplicationWindow):
         if not source:
             self._go_back()
             return
+        subfolders = []       # folder cards shown above the photos (tree view)
+        extra_stats = []      # extra "N folders" style stats
         if source[0] == "album":
             album = lib.get_album(self.con, source[1])
             if not album:
@@ -2659,6 +2711,42 @@ class EaselWindow(Adw.ApplicationWindow):
                       for r in lib.photos_by_album(self.con, album["id"],
                                                    include_hidden=self._show_hidden)]
             date = _fmt_date(album["date_taken"])
+        elif source[0] == "folder":
+            node = (self._folder_nodes or {}).get(source[1])
+            if not node:
+                self._go_back()
+                return
+            kind_label, title = "Folder", node["title"]
+            cover = node["cover"] or None
+            date = ""
+            subfolders = self._folder_child_items(node)
+            if node["album_id"]:
+                photos = [self._photo_from_row(r)
+                          for r in lib.photos_by_album(self.con, node["album_id"],
+                                                        include_hidden=self._show_hidden)]
+            else:
+                photos = []
+            # Stats describe the whole subtree; the photos grid shows only the
+            # photos that live directly in this folder, sub-folders hold the rest.
+            total = node["total"]
+            self._detail_photos = photos
+            self._render_subfolders(subfolders)
+            self.detail_kind_label.set_label(kind_label)
+            self._clear_box(self.detail_hero_slot)
+            hero = Swatch("album", size=108)
+            hero.set_path(cover)
+            self.detail_hero_slot.append(hero)
+            self.detail_name_label.set_label(title)
+            parts = [f"{total} photo{'s' if total != 1 else ''}"]
+            if subfolders:
+                k = len(subfolders)
+                parts.append(f"{k} folder{'s' if k != 1 else ''}")
+            self.detail_stats_label.set_label(" · ".join(parts))
+            self.detail_store.remove_all()
+            for p in self._detail_photos:
+                self.detail_store.append(p)
+            self._schedule_resize_tiles()
+            return
         elif source[0] == "person":
             person = lib.get_person(self.con, source[1])
             if not person:
@@ -2679,6 +2767,7 @@ class EaselWindow(Adw.ApplicationWindow):
             cover = photos[-1].path if photos else None
             date = ""
 
+        self._render_subfolders(subfolders)  # empty for non-folder detail: hides it
         self.detail_kind_label.set_label(kind_label)
         self._clear_box(self.detail_hero_slot)
         hero = Swatch(kind_label.lower(), size=108)
@@ -2697,6 +2786,24 @@ class EaselWindow(Adw.ApplicationWindow):
         for p in self._detail_photos:
             self.detail_store.append(p)
         self._schedule_resize_tiles()
+
+    def _folder_child_items(self, node):
+        items = []
+        for child_path in node["children"]:
+            cn = self._folder_nodes.get(child_path)
+            if not cn:
+                continue
+            items.append(Album(id=cn["album_id"] or 0, title=cn["title"],
+                               path=cn["path"], photo_count=cn["total"],
+                               cover_path=cn["cover"] or "", folder=True,
+                               subfolder_count=len(cn["children"])))
+        return items
+
+    def _render_subfolders(self, items):
+        self.detail_folders_store.remove_all()
+        for it in items:
+            self.detail_folders_store.append(it)
+        self.detail_folders_grid.set_visible(bool(items))
 
     # ---------- map view ----------
 
@@ -2883,12 +2990,24 @@ class EaselWindow(Adw.ApplicationWindow):
     def _reload_all(self):
         self._photos_all = [self._photo_from_row(r)
                             for r in lib.all_photos(self.con, include_hidden=self._show_hidden)]
-        self._albums_all = [
-            Album(id=r["id"], title=r["title"], path=r["path"] or "",
+        # The folder tree drives the Albums view: it shows each watched root as a
+        # folder card (drill in to browse sub-folders), alongside user-created
+        # albums. "Add to" menus offer only the user albums (folders are physical).
+        self._folder_nodes, self._folder_roots = lib.folder_tree(self.con)
+        self._user_albums = [
+            Album(id=r["id"], title=r["title"], path="",
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",
-                  date_taken=r["date_taken"] or 0.0)
-            for r in lib.all_albums(self.con)
+                  date_taken=r["date_taken"] or 0.0, folder=False)
+            for r in lib.all_albums(self.con) if not r["path"]
         ]
+        root_cards = []
+        for path in self._folder_roots:
+            node = self._folder_nodes[path]
+            root_cards.append(Album(
+                id=node["album_id"] or 0, title=node["title"], path=node["path"],
+                photo_count=node["total"], cover_path=node["cover"] or "",
+                folder=True, subfolder_count=len(node["children"])))
+        self._albums_all = root_cards + self._user_albums
         self._persons_all = [
             Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
                    cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)

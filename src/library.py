@@ -675,6 +675,103 @@ def photos_by_album(con, album_id, include_hidden=False):
     ).fetchall()
 
 
+def folder_tree(con):
+    """Build the folder-native navigation tree from the watched roots and the
+    folder albums under them, mirroring the directory structure on disk.
+
+    Every folder album is a directory that holds photos directly; intermediate
+    directories (photos only deeper down) are synthesised so navigation is
+    unbroken. A folder scanned outside any watched root (e.g. a one-off) becomes
+    its own top-level node.
+
+    Returns (nodes, roots):
+      nodes: {path: {path, title, parent, album_id, direct, total, cover,
+                     children (sorted child paths)}}
+        direct = photos in this folder itself (hidden excluded);
+        total  = photos in this folder and everything under it;
+        cover  = a representative photo path (own, else first descendant's).
+      roots: sorted list of top-level node paths.
+    """
+    roots = [r["path"].rstrip("/") or r["path"]
+             for r in con.execute("SELECT path FROM folders").fetchall()]
+    albums = con.execute(
+        """SELECT a.id, a.path, a.cover_path,
+             (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = a.id AND p.hidden = 0) AS direct
+           FROM albums a WHERE a.path IS NOT NULL""").fetchall()
+
+    nodes = {}
+
+    def ensure(path):
+        node = nodes.get(path)
+        if node is None:
+            node = nodes[path] = {
+                "path": path, "title": os.path.basename(path) or path,
+                "parent": None, "album_id": None, "direct": 0, "total": 0,
+                "cover": None, "children": [],
+            }
+        return node
+
+    rootset = set(roots)
+    for r in roots:
+        ensure(r)
+
+    def owning_root(path):
+        best = None
+        for r in roots:
+            if path == r or path.startswith(r + os.sep):
+                if best is None or len(r) > len(best):
+                    best = r
+        return best
+
+    for row in albums:
+        p = row["path"].rstrip("/") or row["path"]
+        node = ensure(p)
+        node["album_id"] = row["id"]
+        node["direct"] = row["direct"] or 0
+        if row["cover_path"]:
+            node["cover"] = row["cover_path"]
+        root = owning_root(p)
+        if root is None:
+            rootset.add(p)  # scanned outside any watched root: its own top level
+            continue
+        # Link p up to its root, synthesising any missing intermediate dirs.
+        child = p
+        while child != root:
+            parent = os.path.dirname(child)
+            cn, pn = ensure(child), ensure(parent)
+            cn["parent"] = parent
+            if child not in pn["children"]:
+                pn["children"].append(child)
+            child = parent
+
+    # Post-order: sort children, sum totals, and let a coverless folder inherit
+    # a descendant's cover.
+    order, seen = [], set()
+
+    def visit(path):
+        if path in seen:
+            return
+        seen.add(path)
+        for c in nodes[path]["children"]:
+            visit(c)
+        order.append(path)
+
+    for r in rootset:
+        visit(r)
+    for path in order:
+        node = nodes[path]
+        node["children"].sort(key=lambda c: nodes[c]["title"].lower())
+        node["total"] = node["direct"] + sum(nodes[c]["total"] for c in node["children"])
+        if not node["cover"]:
+            for c in node["children"]:
+                if nodes[c]["cover"]:
+                    node["cover"] = nodes[c]["cover"]
+                    break
+
+    return nodes, sorted(rootset, key=lambda p: nodes[p]["title"].lower())
+
+
 def get_photo(con, photo_id):
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos WHERE photos.id=?""",

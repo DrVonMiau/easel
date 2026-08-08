@@ -13,7 +13,11 @@ class Photo(GObject.Object):
 
 
 class Album(GObject.Object):
-    """A folder of photos, or a user-created collection."""
+    """A folder of photos, or a user-created collection.
+
+    When `folder` is True the card represents a directory in the folder tree
+    (navigating into it drills down through sub-folders); otherwise it's a
+    user-created album. Folder nodes carry their directory in `path`."""
     __gtype_name__ = "Album"
     id = GObject.Property(type=int, default=0)
     title = GObject.Property(type=str, default="")
@@ -21,6 +25,8 @@ class Album(GObject.Object):
     photo_count = GObject.Property(type=int, default=0)
     cover_path = GObject.Property(type=str, default="")
     date_taken = GObject.Property(type=float, default=0.0)
+    folder = GObject.Property(type=bool, default=False)
+    subfolder_count = GObject.Property(type=int, default=0)
 
 
 class Person(GObject.Object):
