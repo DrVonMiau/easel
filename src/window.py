@@ -137,7 +137,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
     paper_stack = Gtk.Template.Child()
     photo_grid = Gtk.Template.Child()
-    months_grid = Gtk.Template.Child()
+    months_box = Gtk.Template.Child()
     years_grid = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
     fav_grid = Gtk.Template.Child()
@@ -415,7 +415,7 @@ class EaselWindow(Adw.ApplicationWindow):
     # hadjustment "changed" fires on allocation) and when the slider or info
     # panel changes the geometry.
     PHOTO_GRIDS = ("photo_grid", "fav_grid", "detail_photos_grid")
-    CARD_GRIDS = ("album_grid", "months_grid", "years_grid", "people_grid")
+    CARD_GRIDS = ("album_grid", "years_grid", "people_grid")
     GRID_MARGIN = SPACE_L   # 24px page margin around every grid (set in .ui)
     THUMB_GAP = 1           # px gap between adjacent photo thumbnails
     CARD_MARGIN = 8         # card box margin (each side) around its cover
@@ -427,7 +427,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _card_grids(self):
         return (self.album_grid, self.detail_folders_grid,
-                self.months_grid, self.years_grid, self.people_grid)
+                self.years_grid, self.people_grid)
 
     def _cell_px(self):
         """Best current square size for a photo tile — the last value computed
@@ -644,13 +644,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_photos_grid.set_model(Gtk.NoSelection(model=self.detail_store))
         self.detail_photos_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "detail")))
 
-        # Months / Years show bounded period cards, not a tile per photo.
-        self.months_store = Gio.ListStore(item_type=Period)
-        self.months_grid.set_model(Gtk.SingleSelection(model=self.months_store))
-        self.months_grid.set_factory(self._factory(self._bind_period_card))
-        self.months_grid.set_single_click_activate(True)
-        self.months_grid.connect("activate", self._on_period_activated)
-
+        # Years shows bounded period cards, not a tile per photo. (Months is
+        # built by hand in _render_months so it can carry per-year headers.)
         self.years_store = Gio.ListStore(item_type=Period)
         self.years_grid.set_model(Gtk.SingleSelection(model=self.years_store))
         self.years_grid.set_factory(self._factory(self._bind_period_card))
@@ -1008,7 +1003,49 @@ class EaselWindow(Adw.ApplicationWindow):
         return periods
 
     def _render_months(self):
-        self._fill_period_store(self.months_store, self._compute_periods("month"))
+        # Months are grouped under a heading per year (2025, then its months,
+        # 2024, …), so the view is built by hand rather than in a flat grid.
+        self._clear_box(self.months_box)
+        size = self._card_cell_px()
+        groups, index = [], {}
+        for p in self._compute_periods("month"):  # newest first
+            year = p.key[:4] if p.key and p.key != "undated" else "Undated"
+            if year not in index:
+                index[year] = len(groups)
+                groups.append((year, []))
+            groups[index[year]][1].append(p)
+        for year, months in groups:
+            header = Gtk.Label(label=year, xalign=0, css_classes=["year-header"],
+                               margin_top=16, margin_bottom=6)
+            self.months_box.append(header)
+            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
+                               max_children_per_line=30, min_children_per_line=1,
+                               homogeneous=False, column_spacing=4, row_spacing=4,
+                               halign=Gtk.Align.START)
+            for p in months:
+                flow.append(self._month_card(p, size))
+            self.months_box.append(flow)
+
+    def _month_card(self, period, size):
+        box = self._period_card_widget()
+        box.set_size_request(size + 2 * self.CARD_MARGIN, -1)
+        box.swatch.set_size(size)
+        box.swatch.set_placeholder(period.title)
+        box.swatch.set_path(period.cover_path or None)
+        # The year is the section header, so the card shows just the month.
+        label = period.title
+        if period.key and period.key != "undated":
+            try:
+                label = datetime.strptime(period.key, "%Y-%m").strftime("%B")
+            except ValueError:
+                pass
+        box.title.set_label(label)
+        box.subtitle.set_label(period.subtitle)
+        click = Gtk.GestureClick(button=1)
+        click.connect("released",
+                      lambda *_a, p=period: self._open_period("month", p.key, p.title))
+        box.add_controller(click)
+        return box
 
     def _render_years(self):
         self._fill_period_store(self.years_store, self._compute_periods("year"))
