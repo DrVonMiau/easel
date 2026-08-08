@@ -226,6 +226,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self._detail_photos = []
         self._surface_width = 0
         self._surface_height = 0
+        self._photo_cell = 0    # square tile size, set from real grid width
+        self._card_cell = 0     # square cover size for month/year/album cards
         self._thumb_size = self.settings.get_int("thumb-size")
         self._info_photo_id = None
         self._info_preview = None
@@ -391,7 +393,7 @@ class EaselWindow(Adw.ApplicationWindow):
         # Photo grids rebind from their stores (bind reads the current thumb
         # size). Month/Year period cards are a fixed size, so they don't change;
         # only the drill-down detail grid needs re-rendering.
-        self._apply_thumb_columns()
+        self._size_all_grids()
         self._apply_filters()
         if self.view == "detail":
             self._render_detail()
@@ -407,59 +409,118 @@ class EaselWindow(Adw.ApplicationWindow):
         # Bigger slider -> fewer, larger columns; max slider -> 3 (≈33% each).
         return round(self._MAX_COLS - t * (self._MAX_COLS - self._MIN_COLS))
 
-    # One place defines the photo grid layout for every view (Days, album and
-    # month/year detail): the same column count, the same 1px inter-tile gap,
-    # and the same square tile size. Only the photos filling it differ.
+    # ---- grid layout, defined once and driven by each grid's real width ----
+    #
+    # Every view lays photos/cards on the same grid; only the content differs.
+    # GtkGridView's own column heuristic (min/max columns + child natural size)
+    # proved unreliable for "square cells that fill the column" — it left tall
+    # rectangles or row gaps in some views but not others, because it doesn't
+    # dependably re-measure a cell's height for the width it finally allocates.
+    #
+    # So we don't rely on it. We read each grid's *actual* allocated width, pick
+    # an exact column count, force min-columns == max-columns to that count, and
+    # size every swatch to the resulting column width. Cells are then square by
+    # construction, identically in every view. Because fill-mode swatches may
+    # shrink to width 0 (see Swatch.set_fill) and the scrollers never scroll
+    # horizontally, forcing min == max can't push the grid wider — no layout
+    # loop. Sizing re-runs whenever a grid's width changes (its scroller's
+    # hadjustment "changed" fires on allocation) and when the slider or info
+    # panel changes the geometry.
     PHOTO_GRIDS = ("photo_grid", "fav_grid", "detail_photos_grid")
-    GRID_MARGIN = SPACE_L   # 24px page margin around every grid
-    THUMB_GAP = 1           # px gap between adjacent thumbnails
+    CARD_GRIDS = ("album_grid", "months_grid", "years_grid", "people_grid")
+    GRID_MARGIN = SPACE_L   # 24px page margin around every grid (set in .ui)
+    THUMB_GAP = 1           # px gap between adjacent photo thumbnails
+    CARD_MARGIN = 8         # card box margin (each side) around its cover
+    CARD_TARGET = 200       # ideal card width before adding another column
+    CARD_MAX_COLS = 8
 
     def _photo_grids(self):
         return (self.photo_grid, self.fav_grid, self.detail_photos_grid)
 
+    def _card_grids(self):
+        return (self.album_grid, self.months_grid, self.years_grid, self.people_grid)
+
     def _cell_px(self):
-        """The square tile size for the current column count — one grid column
-        of the available paper width. Computed the same way for every grid
-        (mirrors _apply_layout_metrics: page margins, the grid's own margin, and
-        the info panel when open), so all views lay out identically. Tiles fill
-        their cell (fill mode), so this only needs to be close; it also can't
-        force the grid wider."""
+        """Best current square size for a photo tile — the last value computed
+        from a real grid width, or an estimate before any grid is realised.
+        Used by _make_tile / _bind_tile so freshly recycled tiles start at the
+        right size (then _size_grid keeps them exact)."""
+        if self._photo_cell:
+            return self._photo_cell
+        return self._estimate_cell(self._columns_for_thumb(), self.THUMB_GAP)
+
+    def _card_cell_px(self):
+        if self._card_cell:
+            return self._card_cell
+        return self._estimate_cell(4, 2 * self.CARD_MARGIN)
+
+    def _estimate_cell(self, n, gap):
+        # Pre-realisation fallback: derive the paper width from the surface the
+        # same way _apply_layout_metrics does, so the first paint is close.
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
         if self.info_revealer.get_reveal_child():
             paper -= round(w * 0.04) + self.PANEL_WIDTH
         content = max(240, paper - 2 * self.GRID_MARGIN)
-        n = self._columns_for_thumb()
-        return max(120, int((content - self.THUMB_GAP * n) / n))
+        return max(120, (content // max(1, n)) - gap)
 
-    def _apply_thumb_columns(self):
-        # Cap the columns at the chosen count; keep the minimum low so a narrow
-        # window drops columns instead of forcing the grid (and window) wider.
-        n = self._columns_for_thumb()
-        for grid in self._photo_grids():
-            grid.set_min_columns(2)
+    def _setup_grid_sizing(self):
+        # Re-size a grid whenever it is allocated a new width. A GridView is the
+        # direct child of its GtkScrolledWindow; the scroller's hadjustment
+        # emits "changed" on every allocation, which is our width-change hook.
+        for grid in self._photo_grids() + self._card_grids():
+            scroller = grid.get_parent()
+            adj = scroller.get_hadjustment() if scroller is not None else None
+            if adj is not None:
+                adj.connect("changed", lambda _a, g=grid: self._size_grid(g))
+
+    def _size_grid(self, grid):
+        """Force exact columns and square swatches for one grid from its real
+        width. A no-op until the grid has been allocated (width > 1); the
+        hadjustment "changed" signal re-invokes us once it has."""
+        w = grid.get_width()
+        if w <= 1:
+            return
+        if grid in self._photo_grids():
+            n = max(1, min(self._MAX_COLS, self._columns_for_thumb()))
+            # A tile's swatch fills the column minus its trailing gap, so the
+            # height must equal exactly that width to stay square.
+            cell = max(1, (w // n) - self.THUMB_GAP)
+            self._photo_cell = cell
+        else:
+            n = max(2, min(self.CARD_MAX_COLS, w // self.CARD_TARGET))
+            # A card's cover fills the column minus the card's side margins.
+            cell = max(1, (w // n) - 2 * self.CARD_MARGIN)
+            self._card_cell = cell
+        # Only touch the column count when it actually changes: set_min/max
+        # queues a resize, so re-setting the same value on every "changed" would
+        # spin. With the count stable and swatch sizes converged, nothing else
+        # queues a resize and the layout settles.
+        if grid.get_min_columns() != n or grid.get_max_columns() != n:
+            grid.set_min_columns(n)
             grid.set_max_columns(n)
+        self._resize_swatches(grid, cell)
 
-    def _resize_tiles(self):
-        """Re-size already-realised tiles when the width changes (resize, panel
-        open/close) without rebuilding the stores, so scroll and selection are
-        kept."""
-        size = self._cell_px()
-        for grid in self._photo_grids():
-            stack = [grid]
-            while stack:
-                w = stack.pop()
-                if getattr(w, "_photo", None) is not None and hasattr(w, "swatch"):
-                    w.swatch.set_size(size)
-                child = w.get_first_child()
-                while child:
-                    stack.append(child)
-                    child = child.get_next_sibling()
-        return False  # usable as a GLib.idle_add callback
+    @staticmethod
+    def _resize_swatches(root, cell):
+        stack = [root]
+        while stack:
+            widget = stack.pop()
+            swatch = getattr(widget, "swatch", None)
+            if isinstance(swatch, Swatch):
+                swatch.set_size(cell)  # no-op if unchanged
+            child = widget.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+
+    def _size_all_grids(self):
+        for grid in self._photo_grids() + self._card_grids():
+            self._size_grid(grid)
 
     def _schedule_resize_tiles(self):
-        GLib.idle_add(self._resize_tiles)
+        GLib.idle_add(self._size_all_grids)
 
     def _on_realize(self, *_args):
         surface = self.get_surface()
@@ -596,7 +657,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self.people_grid.connect(
             "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
-        self._apply_thumb_columns()
+        self._setup_grid_sizing()
 
     def _setup_map(self):
         # A slim banner tells people the map can run offline; the actual choice
@@ -880,6 +941,7 @@ class EaselWindow(Adw.ApplicationWindow):
         if not hasattr(box, "swatch"):
             box = self._album_card_widget()
             item.set_child(box)
+        box.swatch.set_size(self._card_cell_px())
         box.swatch.set_placeholder("album")
         box.swatch.set_path(album.cover_path or None)
         box.title.set_label(album.title)
@@ -888,11 +950,13 @@ class EaselWindow(Adw.ApplicationWindow):
         self._attach_album_menu(box, album.id)
 
     def _album_card_widget(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=192,
+        # No fixed width: the card fills its grid column (see _size_grid) and the
+        # cover stays a 1:1 square at whatever width the column gives it.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
-        swatch = Swatch("", size=192)
+        swatch = Swatch("", size=self._card_cell_px())
         swatch.add_css_class("card-cover")
         swatch.set_fill(True)  # fill the card width and stay square (1:1)
 
@@ -1003,17 +1067,20 @@ class EaselWindow(Adw.ApplicationWindow):
         if not hasattr(box, "swatch"):
             box = self._period_card_widget()
             item.set_child(box)
+        box.swatch.set_size(self._card_cell_px())
         box.swatch.set_placeholder(period.title)
         box.swatch.set_path(period.cover_path or None)
         box.title.set_label(period.title)
         box.subtitle.set_label(period.subtitle)
 
     def _period_card_widget(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=192,
+        # No fixed width: the card fills its grid column (see _size_grid) and the
+        # cover stays a 1:1 square at whatever width the column gives it.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
-        swatch = Swatch("", size=192)
+        swatch = Swatch("", size=self._card_cell_px())
         swatch.add_css_class("card-cover")
         swatch.set_fill(True)  # fill the card width and stay square (1:1)
         title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
@@ -2645,6 +2712,7 @@ class EaselWindow(Adw.ApplicationWindow):
         if not hasattr(box, "swatch"):
             box = self._album_card_widget()  # same card, cover styled by .card-cover
             item.set_child(box)
+        box.swatch.set_size(self._card_cell_px())
         box.swatch.set_placeholder("person")
         box.swatch.set_path(person.cover_path or None)
         box.title.set_label(person.name)

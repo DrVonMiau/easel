@@ -865,10 +865,16 @@ class Swatch(Gtk.Widget):
 
     def do_measure(self, orientation, for_size):
         if self._fill:
+            # Fill mode: the width may shrink to 0 so the swatch always fits its
+            # grid column (and never forces the window wider), while the height
+            # is fixed to _size. The window sets _size to the real column width
+            # (see EaselWindow._size_grid), so the cell is square by
+            # construction — we don't depend on GtkGridView re-measuring the
+            # height for the width it finally allocates (it doesn't do so
+            # dependably, which left tall rectangles in some views).
             if orientation == Gtk.Orientation.HORIZONTAL:
                 return (0, self._size, -1, -1)   # shrinkable; natural = size hint
-            side = for_size if for_size > 0 else self._size  # height-for-width: square
-            return (side, side, -1, -1)
+            return (self._size, self._size, -1, -1)  # fixed square height
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):
