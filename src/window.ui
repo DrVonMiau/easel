@@ -21,6 +21,10 @@
         <attribute name="label" translatable="yes">Rescan Library</attribute>
         <attribute name="action">win.rescan</attribute>
       </item>
+      <item>
+        <attribute name="label" translatable="yes">Show Hidden Photos</attribute>
+        <attribute name="action">win.show-hidden</attribute>
+      </item>
     </section>
     <section>
       <item>

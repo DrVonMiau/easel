@@ -37,7 +37,8 @@ PHOTO_ENTRIES = [
     ("Add to Favourites", "toggle-fav"),
     (None, None),
     ("Set as Album Cover", "set-cover"),
-    ("Delete Picture", "delete"),
+    ("Hide", "hide"),
+    ("Move to Trash…", "trash"),
 ]
 ALBUM_ENTRIES = [
     ("Open", "open"),
@@ -212,6 +213,7 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
+        self._show_hidden = False  # "Show hidden photos" toggle (primary menu)
         # What the detail page is showing: ("album", id) or ("period", kind, key, title).
         self._detail_source = None
         self._search_query = ""
@@ -606,9 +608,15 @@ class EaselWindow(Adw.ApplicationWindow):
         sort_mode.connect("activate", self._on_sort_mode)
         self.add_action(sort_mode)
 
+        show_hidden = Gio.SimpleAction.new_stateful(
+            "show-hidden", None, GLib.Variant("b", self._show_hidden))
+        show_hidden.connect("activate", self._on_show_hidden)
+        self.add_action(show_hidden)
+
         item_actions = Gio.SimpleActionGroup()
         for name in ("open", "edit-image", "edit-info", "add-to-album",
                      "add-to-new-album", "set-cover", "toggle-fav",
+                     "hide", "trash",
                      "rename-album", "rename-person", "delete"):
             act = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             act.connect("activate", self._on_item_action)
@@ -1122,6 +1130,8 @@ class EaselWindow(Adw.ApplicationWindow):
                 row = lib.get_photo(self.con, widget._menu_item_id)
                 label = ("Remove from Favourites" if row and row["favorite"]
                          else "Add to Favourites")
+            if action == "hide":
+                label = "Unhide" if lib.is_hidden(self.con, widget._menu_item_id) else "Hide"
             mi = Gio.MenuItem.new(label, None)
             mi.set_action_and_target_value(f"item.{action}", payload())
             section.append_item(mi)
@@ -1143,6 +1153,12 @@ class EaselWindow(Adw.ApplicationWindow):
 
         if name == "delete":
             self._confirm_delete(kind, item_id)
+            return
+        if name == "hide":
+            self._toggle_hidden(item_id)
+            return
+        if name == "trash":
+            self._confirm_trash(item_id)
             return
         if name == "open" and kind == "album":
             self._select_tab("albums")
@@ -1211,6 +1227,62 @@ class EaselWindow(Adw.ApplicationWindow):
             return
         lib.set_favorite(self.con, photo_id, not row["favorite"])
         self._reload_all()
+
+    def _toggle_hidden(self, photo_id):
+        """Hide a photo (reversible, file untouched) or un-hide it. Hiding puts
+        up an Undo toast so it's a safe, one-click-back action."""
+        now_hidden = not lib.is_hidden(self.con, photo_id)
+        lib.set_photo_hidden(self.con, photo_id, now_hidden)
+        if self._info_photo_id == photo_id and now_hidden and not self._show_hidden:
+            self._close_info()
+        self._reload_all()
+        if now_hidden:
+            toast = Adw.Toast.new("Photo hidden")
+            toast.set_button_label("Undo")
+            toast.connect("button-clicked",
+                          lambda _t: (lib.set_photo_hidden(self.con, photo_id, False),
+                                      self._reload_all()))
+            self.toast_overlay.add_toast(toast)
+        else:
+            self._toast("Photo unhidden")
+
+    def _confirm_trash(self, photo_id):
+        """Move the file to the system Trash — the only action in Easel that
+        touches the file on disk, so it's clearly fenced behind a warning. The
+        Trash is recoverable from the file manager; we never permanently
+        delete."""
+        row = lib.get_photo(self.con, photo_id)
+        if not row:
+            return
+        name = os.path.basename(row["path"])
+        dialog = Adw.AlertDialog(
+            heading="Move to Trash?",
+            body=(f"“{name}” will be moved to your system Trash. This removes it "
+                  "from disk — you can restore it from Trash in your file manager. "
+                  "To simply tuck it out of Easel without touching the file, use "
+                  "Hide instead."))
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("trash", "Move to Trash")
+        dialog.set_response_appearance("trash", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.connect("response",
+                       lambda _d, r: self._do_trash(photo_id) if r == "trash" else None)
+        dialog.present(self)
+
+    def _do_trash(self, photo_id):
+        row = lib.get_photo(self.con, photo_id)
+        if not row:
+            return
+        try:
+            Gio.File.new_for_path(row["path"]).trash(None)
+        except GLib.Error as err:
+            self._toast(f"Couldn’t move to Trash: {err.message}")
+            return
+        if self._info_photo_id == photo_id:
+            self._close_info()
+        lib.delete_photo(self.con, photo_id)
+        self._reload_all()
+        self._toast("Moved to Trash")
 
     def _confirm_delete(self, kind, item_id):
         if kind == "album":
@@ -2529,6 +2601,11 @@ class EaselWindow(Adw.ApplicationWindow):
     def _toast(self, text):
         self.toast_overlay.add_toast(Adw.Toast.new(text))
 
+    def _on_show_hidden(self, action, _param):
+        self._show_hidden = not self._show_hidden
+        action.set_state(GLib.Variant("b", self._show_hidden))
+        self._reload_all()
+
     def _on_sort_mode(self, action, param):
         group = SORT_GROUP_FOR_TAB.get(self.view)
         if not group:
@@ -2623,7 +2700,8 @@ class EaselWindow(Adw.ApplicationWindow):
             kind_label, title = "Album", album["title"]
             cover = album["cover_path"] or None
             photos = [self._photo_from_row(r)
-                      for r in lib.photos_by_album(self.con, album["id"])]
+                      for r in lib.photos_by_album(self.con, album["id"],
+                                                   include_hidden=self._show_hidden)]
             date = _fmt_date(album["date_taken"])
         elif source[0] == "person":
             person = lib.get_person(self.con, source[1])
@@ -2632,7 +2710,8 @@ class EaselWindow(Adw.ApplicationWindow):
                 return
             kind_label, title = "Person", person["name"]
             photos = [self._photo_from_row(r)
-                      for r in lib.photos_for_person(self.con, person["id"])]
+                      for r in lib.photos_for_person(self.con, person["id"],
+                                                     include_hidden=self._show_hidden)]
             cover = photos[0].path if photos else None
             date = ""
         else:  # ("period", kind, key, title)
@@ -2669,7 +2748,7 @@ class EaselWindow(Adw.ApplicationWindow):
         """Pin every geotagged photo on the offline world map. The first time
         it's opened in a session we also read GPS from any photo that hasn't
         been checked yet (a background pass), then refresh the pins."""
-        rows = lib.photos_with_location(self.con)
+        rows = lib.photos_with_location(self.con, include_hidden=self._show_hidden)
         entries = [(r["lon"], r["lat"], self._photo_from_row(r)) for r in rows]
         self._map_view.set_photos(entries)
         self.map_stack.set_visible_child_name("view" if entries else "empty")
@@ -2846,7 +2925,8 @@ class EaselWindow(Adw.ApplicationWindow):
                      rotation=(r["rotation"] or 0) if "rotation" in r.keys() else 0)
 
     def _reload_all(self):
-        self._photos_all = [self._photo_from_row(r) for r in lib.all_photos(self.con)]
+        self._photos_all = [self._photo_from_row(r)
+                            for r in lib.all_photos(self.con, include_hidden=self._show_hidden)]
         self._albums_all = [
             Album(id=r["id"], title=r["title"], path=r["path"] or "",
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",

@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS photos(
   id INTEGER PRIMARY KEY, path TEXT UNIQUE,
   mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0,
   rotation INTEGER DEFAULT 0,
-  lat REAL, lon REAL);
+  lat REAL, lon REAL,
+  hidden INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS album_photos(
   album_id INTEGER NOT NULL, photo_id INTEGER NOT NULL,
   UNIQUE(album_id, photo_id),
@@ -83,6 +84,14 @@ def connect():
             con.commit()
         except sqlite3.OperationalError:
             pass
+    # Migration for libraries created before Hide. A hidden photo is tucked out
+    # of every view but stays on disk and in the index, so it can be un-hidden;
+    # nothing about the file changes.
+    try:
+        con.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
+        con.commit()
+    except sqlite3.OperationalError:
+        pass
     # One-off cleanup for libraries scanned before hidden files were skipped:
     # drop any indexed dotfile / AppleDouble sidecar (a "/." anywhere in the
     # path means a hidden path component). Cascades to album_photos.
@@ -628,28 +637,40 @@ _FOLDER_TITLE = """(SELECT a.title FROM album_photos ap JOIN albums a ON a.id = 
    WHERE ap.photo_id = photos.id AND a.path IS NOT NULL LIMIT 1) AS album_title"""
 
 
-def all_photos(con):
+# Hidden photos stay in the index but are kept out of every view unless the
+# caller opts in (the "Show hidden photos" toggle). This one clause is spliced
+# into each photo-listing query so the rule lives in a single place.
+def _hidden_clause(include_hidden, prefix="AND"):
+    return "" if include_hidden else f" {prefix} photos.hidden=0"
+
+
+def all_photos(con, include_hidden=False):
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE 1{_hidden_clause(include_hidden)}
             ORDER BY photos.date_taken DESC, photos.path"""
     ).fetchall()
 
 
 def all_albums(con):
+    # Counts and the "latest" date reflect only visible (non-hidden) photos, so
+    # an album's tile matches what opening it shows.
     return con.execute(
         """SELECT albums.*,
-             (SELECT COUNT(*) FROM album_photos WHERE album_photos.album_id = albums.id) AS photo_count,
+             (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = albums.id AND p.hidden=0) AS photo_count,
              (SELECT MAX(p.date_taken) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-              WHERE ap.album_id = albums.id) AS date_taken
+              WHERE ap.album_id = albums.id AND p.hidden=0) AS date_taken
            FROM albums ORDER BY user_created DESC, albums.title"""
     ).fetchall()
 
 
-def photos_by_album(con, album_id):
+def photos_by_album(con, album_id, include_hidden=False):
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM album_photos ap
             JOIN photos ON photos.id = ap.photo_id
-            WHERE ap.album_id=? ORDER BY photos.date_taken, photos.path""",
+            WHERE ap.album_id=?{_hidden_clause(include_hidden)}
+            ORDER BY photos.date_taken, photos.path""",
         (album_id,),
     ).fetchall()
 
@@ -675,6 +696,18 @@ def get_album(con, album_id):
 def set_favorite(con, photo_id, favorite):
     con.execute("UPDATE photos SET favorite=? WHERE id=?", (1 if favorite else 0, photo_id))
     con.commit()
+
+
+def set_photo_hidden(con, photo_id, hidden):
+    """Hide (or un-hide) a photo. Reversible and non-destructive: the file and
+    its index row are untouched; it just stops appearing in the views."""
+    con.execute("UPDATE photos SET hidden=? WHERE id=?", (1 if hidden else 0, photo_id))
+    con.commit()
+
+
+def is_hidden(con, photo_id):
+    row = con.execute("SELECT hidden FROM photos WHERE id=?", (photo_id,)).fetchone()
+    return bool(row and row["hidden"])
 
 
 def set_photo_date(con, photo_id, date_taken):
@@ -711,11 +744,11 @@ def backfill_locations(con, progress_cb=None):
     return found
 
 
-def photos_with_location(con):
+def photos_with_location(con, include_hidden=False):
     """Every geotagged photo, newest first — the data the Map view pins."""
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
-            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            WHERE lat IS NOT NULL AND lon IS NOT NULL{_hidden_clause(include_hidden)}
             ORDER BY photos.date_taken DESC, photos.path"""
     ).fetchall()
 
@@ -802,12 +835,13 @@ def people_by_photo(con):
     return out
 
 
-def photos_for_person(con, person_id):
+def photos_for_person(con, person_id, include_hidden=False):
     """Every photo a person is tagged in, newest first."""
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM faces f
             JOIN photos ON photos.id = f.photo_id
-            WHERE f.person_id=? ORDER BY photos.date_taken DESC, photos.path""",
+            WHERE f.person_id=?{_hidden_clause(include_hidden)}
+            ORDER BY photos.date_taken DESC, photos.path""",
         (person_id,),
     ).fetchall()
 
