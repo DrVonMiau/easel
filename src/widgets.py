@@ -975,20 +975,20 @@ class EaselGridView(Gtk.GridView):
 
     __gtype_name__ = "EaselGridView"
 
-    # Class defaults so the widget works even when GtkBuilder instantiates it
+    # Class default so the widget works even when GtkBuilder instantiates it
     # without calling Python __init__ (a known PyGObject gotcha).
     _width_cb = None
-    _last_width = -1
 
     def set_width_cb(self, cb):
         self._width_cb = cb
 
     def do_size_allocate(self, width, height, baseline):
         Gtk.GridView.do_size_allocate(self, width, height, baseline)
-        if width != self._last_width:
-            self._last_width = width
-            if self._width_cb is not None:
-                self._width_cb(self, width)
+        # Report the true content width on every allocation (resize, panel
+        # toggle, scrollbar, becoming visible in a new folder). The window's
+        # handler is idempotent, so re-reporting the same width is cheap.
+        if self._width_cb is not None and width > 1:
+            self._width_cb(self, width)
 
 
 class Swatch(Gtk.Widget):

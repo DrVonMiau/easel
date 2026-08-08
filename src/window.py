@@ -453,6 +453,12 @@ class EaselWindow(Adw.ApplicationWindow):
         # instant it's allocated — the one reliable trigger (resize, panel
         # toggle, scrollbar, stack transition), including for grids nested in a
         # box. We size squares from that width.
+        self._grid_labels = {
+            self.photo_grid: "photos", self.detail_photos_grid: "detail-photos",
+            self.folders_grid: "folders", self.album_grid: "albums",
+            self.detail_folders_grid: "subfolders", self.people_grid: "people",
+        }
+        self._grid_dbg_seen = set()
         for grid in self._photo_grids() + self._card_grids():
             grid.set_width_cb(self._size_grid)
 
@@ -473,6 +479,15 @@ class EaselWindow(Adw.ApplicationWindow):
             # A card's cover fills the column minus the card's side margins.
             cell = max(1, (w // n) - 2 * self.CARD_MARGIN)
             self._card_cell = cell
+        # Temporary diagnostic (safe to remove): prints each grid's real width,
+        # column count and cell size once per distinct value, so a mis-sized
+        # folder can be pinpointed from the terminal.
+        sig = (id(grid), w, n, cell)
+        if sig not in self._grid_dbg_seen:
+            self._grid_dbg_seen.add(sig)
+            label = self._grid_labels.get(grid, "?")
+            print(f"[easel-grid] {label} view={self.view} width={w} columns={n} "
+                  f"cell={cell}", file=sys.stderr)
         # Applied on idle: this runs from within the grid's size-allocate, so
         # changing columns / child sizes inline would re-enter layout. The
         # captured (n, cell) are correct regardless of when the idle fires, and
