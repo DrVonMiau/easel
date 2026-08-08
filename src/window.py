@@ -24,7 +24,7 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango
 
 from . import library as lib
-from .models import Album, Period, Person, Photo
+from .models import Album, Person, Photo
 from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FacePinLayer,
                       FilterThumb, MapView, Swatch, load_full_texture,
                       render_adjusted_texture)
@@ -61,7 +61,7 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-VIEW_NAMES = ("all_photos", "months", "years", "people", "map", "albums", "favourites")
+VIEW_NAMES = ("all_photos", "folders", "albums", "people", "map")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
@@ -127,20 +127,16 @@ class EaselWindow(Adw.ApplicationWindow):
 
     middle_stack = Gtk.Template.Child()
     tab_all_photos = Gtk.Template.Child()
-    tab_months = Gtk.Template.Child()
-    tab_years = Gtk.Template.Child()
+    tab_folders = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
-    tab_favourites = Gtk.Template.Child()
     tab_map = Gtk.Template.Child()
     tab_people = Gtk.Template.Child()
     search_entry = Gtk.Template.Child()
 
     paper_stack = Gtk.Template.Child()
     photo_grid = Gtk.Template.Child()
-    months_box = Gtk.Template.Child()
-    years_grid = Gtk.Template.Child()
+    folders_grid = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
-    fav_grid = Gtk.Template.Child()
     map_stack = Gtk.Template.Child()
     map_slot = Gtk.Template.Child()
     people_stack = Gtk.Template.Child()
@@ -202,13 +198,14 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
-        self._show_hidden = False  # "Show hidden photos" toggle (primary menu)
-        # What the detail page is showing: ("album", id) or ("period", kind, key, title).
+        # What the detail page is showing: ("folder", path), ("album", id),
+        # ("person", id), ("favourites",) or ("hidden",).
         self._detail_source = None
         self._search_query = ""
         self._photos_all = []
         self._albums_all = []
         self._user_albums = []
+        self._folder_cards = []    # root folder cards for the Folders tab
         self._folder_nodes = {}    # path -> tree node (see lib.folder_tree)
         self._folder_roots = []    # top-level folder paths
         self._persons_all = []
@@ -216,7 +213,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._map_view = None
         self._gps_backfilled = False
         self._visible_photos = []
-        self._visible_favs = []
         self._detail_photos = []
         self._surface_width = 0
         self._surface_height = 0
@@ -240,10 +236,8 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self._tab_buttons = {
             "all_photos": self.tab_all_photos,
-            "months": self.tab_months,
-            "years": self.tab_years,
+            "folders": self.tab_folders,
             "albums": self.tab_albums,
-            "favourites": self.tab_favourites,
             "map": self.tab_map,
             "people": self.tab_people,
         }
@@ -414,8 +408,8 @@ class EaselWindow(Adw.ApplicationWindow):
     # loop. Sizing re-runs whenever a grid's width changes (its scroller's
     # hadjustment "changed" fires on allocation) and when the slider or info
     # panel changes the geometry.
-    PHOTO_GRIDS = ("photo_grid", "fav_grid", "detail_photos_grid")
-    CARD_GRIDS = ("album_grid", "years_grid", "people_grid")
+    PHOTO_GRIDS = ("photo_grid", "detail_photos_grid")
+    CARD_GRIDS = ("folders_grid", "album_grid", "people_grid")
     GRID_MARGIN = SPACE_L   # 24px page margin around every grid (set in .ui)
     THUMB_GAP = 1           # px gap between adjacent photo thumbnails
     CARD_MARGIN = 8         # card box margin (each side) around its cover
@@ -423,11 +417,11 @@ class EaselWindow(Adw.ApplicationWindow):
     CARD_MAX_COLS = 8
 
     def _photo_grids(self):
-        return (self.photo_grid, self.fav_grid, self.detail_photos_grid)
+        return (self.photo_grid, self.detail_photos_grid)
 
     def _card_grids(self):
-        return (self.album_grid, self.detail_folders_grid,
-                self.years_grid, self.people_grid)
+        return (self.folders_grid, self.album_grid, self.detail_folders_grid,
+                self.people_grid)
 
     def _cell_px(self):
         """Best current square size for a photo tile — the last value computed
@@ -598,11 +592,6 @@ class EaselWindow(Adw.ApplicationWindow):
         key_ctl.connect("key-pressed", self._on_key_pressed)
         self.add_controller(key_ctl)
 
-        show_hidden = Gio.SimpleAction.new_stateful(
-            "show-hidden", None, GLib.Variant("b", self._show_hidden))
-        show_hidden.connect("activate", self._on_show_hidden)
-        self.add_action(show_hidden)
-
         item_actions = Gio.SimpleActionGroup()
         for name in ("open", "edit-image", "edit-info", "add-to-album",
                      "add-to-new-album", "set-cover", "toggle-fav",
@@ -620,6 +609,15 @@ class EaselWindow(Adw.ApplicationWindow):
         self.photo_grid.set_model(Gtk.NoSelection(model=self.photo_store))
         self.photo_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "photos")))
 
+        # Folders tab: the watched roots as folder cards (drill in for photos).
+        self.folders_store = Gio.ListStore(item_type=Album)
+        self.folders_grid.set_model(Gtk.SingleSelection(model=self.folders_store))
+        self.folders_grid.set_factory(self._factory(self._bind_album_card))
+        self.folders_grid.set_single_click_activate(True)
+        self.folders_grid.connect(
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
+
+        # Albums tab: user-created albums plus the pinned Favourites / Hidden.
         self.album_store = Gio.ListStore(item_type=Album)
         self.album_grid.set_model(Gtk.SingleSelection(model=self.album_store))
         self.album_grid.set_factory(self._factory(self._bind_album_card))
@@ -636,21 +634,9 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_folders_grid.connect(
             "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
 
-        self.fav_store = Gio.ListStore(item_type=Photo)
-        self.fav_grid.set_model(Gtk.NoSelection(model=self.fav_store))
-        self.fav_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "favourites")))
-
         self.detail_store = Gio.ListStore(item_type=Photo)
         self.detail_photos_grid.set_model(Gtk.NoSelection(model=self.detail_store))
         self.detail_photos_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "detail")))
-
-        # Years shows bounded period cards, not a tile per photo. (Months is
-        # built by hand in _render_months so it can carry per-year headers.)
-        self.years_store = Gio.ListStore(item_type=Period)
-        self.years_grid.set_model(Gtk.SingleSelection(model=self.years_store))
-        self.years_grid.set_factory(self._factory(self._bind_period_card))
-        self.years_grid.set_single_click_activate(True)
-        self.years_grid.connect("activate", self._on_period_activated)
 
         self.people_store = Gio.ListStore(item_type=Person)
         self.people_grid.set_model(Gtk.SingleSelection(model=self.people_store))
@@ -669,11 +655,6 @@ class EaselWindow(Adw.ApplicationWindow):
         self._map_view.set_activate_cb(self._on_map_pin)
         self.map_slot.append(self._map_view)
 
-    def _on_period_activated(self, gridview, position):
-        period = gridview.get_model().get_item(position)
-        if period is not None:
-            self._open_period(period.kind, period.key, period.title)
-
     def _factory(self, bind_fn):
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", lambda _f, item: item.set_child(Gtk.Box()))
@@ -681,7 +662,7 @@ class EaselWindow(Adw.ApplicationWindow):
         return factory
 
     def _source_for(self, name):
-        return {"photos": self._visible_photos, "favourites": self._visible_favs,
+        return {"photos": self._visible_photos,
                 "detail": self._detail_photos}.get(name, self._visible_photos)
 
     def _bind_tile_item(self, item, source_name):
@@ -883,7 +864,7 @@ class EaselWindow(Adw.ApplicationWindow):
             box = self._album_card_widget()
             item.set_child(box)
         box.swatch.set_size(self._card_cell_px())
-        box.swatch.set_placeholder("album")
+        box.swatch.set_placeholder(album.special or "album")
         box.swatch.set_path(album.cover_path or None)
         box.title.set_label(album.title)
         count = album.photo_count
@@ -892,8 +873,8 @@ class EaselWindow(Adw.ApplicationWindow):
             n = album.subfolder_count
             parts.append(f"{n} folder{'s' if n != 1 else ''}")
         box.subtitle.set_label(" · ".join(parts))
-        if album.folder:
-            # A directory node in the tree: no album rename/delete menu.
+        if album.folder or album.special:
+            # A directory node, or a pinned special album: no rename/delete menu.
             box._no_menu = True
             box.menu_btn.set_visible(False)
         else:
@@ -965,123 +946,6 @@ class EaselWindow(Adw.ApplicationWindow):
         box._menu_item_id = album_id
         box._menu_entries = ALBUM_ENTRIES
         box._menu_extra = {}
-
-    # ---------- period views (Months / Years) ----------
-
-    # (kind -> (key strftime, title strftime)). "Undated" catches bad/zero dates.
-    _PERIOD_FMT = {"month": ("%Y-%m", "%B %Y"), "year": ("%Y", "%Y")}
-
-    @staticmethod
-    def _period_of(date_taken, kind):
-        key_fmt, title_fmt = EaselWindow._PERIOD_FMT[kind]
-        try:
-            dt = datetime.fromtimestamp(date_taken)
-            return dt.strftime(key_fmt), dt.strftime(title_fmt)
-        except (ValueError, OSError):
-            return "undated", "Undated"
-
-    def _compute_periods(self, kind):
-        """Bucket the visible photos into month/year Periods, newest first, each
-        with its newest photo as the cover. Bounded to a handful (years) or a
-        few hundred (months) cards — never one per photo."""
-        order = []
-        buckets = {}
-        for p in sorted(self._visible_photos, key=lambda p: -p.date_taken):
-            key, title = self._period_of(p.date_taken, kind)
-            bucket = buckets.get(key)
-            if bucket is None:
-                bucket = buckets[key] = {"title": title, "count": 0, "cover": p.path}
-                order.append(key)
-            bucket["count"] += 1
-        periods = []
-        for key in order:
-            b = buckets[key]
-            n = b["count"]
-            periods.append(Period(kind=kind, key=key, title=b["title"],
-                                  subtitle=f"{n} photo{'s' if n != 1 else ''}",
-                                  cover_path=b["cover"] or ""))
-        return periods
-
-    def _render_months(self):
-        # Months are grouped under a heading per year (2025, then its months,
-        # 2024, …), so the view is built by hand rather than in a flat grid.
-        self._clear_box(self.months_box)
-        size = self._card_cell_px()
-        groups, index = [], {}
-        for p in self._compute_periods("month"):  # newest first
-            year = p.key[:4] if p.key and p.key != "undated" else "Undated"
-            if year not in index:
-                index[year] = len(groups)
-                groups.append((year, []))
-            groups[index[year]][1].append(p)
-        for year, months in groups:
-            header = Gtk.Label(label=year, xalign=0, css_classes=["year-header"],
-                               margin_top=16, margin_bottom=6)
-            self.months_box.append(header)
-            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
-                               max_children_per_line=30, min_children_per_line=1,
-                               homogeneous=False, column_spacing=4, row_spacing=4,
-                               halign=Gtk.Align.START)
-            for p in months:
-                flow.append(self._month_card(p, size))
-            self.months_box.append(flow)
-
-    def _month_card(self, period, size):
-        box = self._period_card_widget()
-        box.set_size_request(size + 2 * self.CARD_MARGIN, -1)
-        box.swatch.set_size(size)
-        box.swatch.set_placeholder(period.title)
-        box.swatch.set_path(period.cover_path or None)
-        # The year is the section header, so the card shows just the month.
-        label = period.title
-        if period.key and period.key != "undated":
-            try:
-                label = datetime.strptime(period.key, "%Y-%m").strftime("%B")
-            except ValueError:
-                pass
-        box.title.set_label(label)
-        box.subtitle.set_label(period.subtitle)
-        click = Gtk.GestureClick(button=1)
-        click.connect("released",
-                      lambda *_a, p=period: self._open_period("month", p.key, p.title))
-        box.add_controller(click)
-        return box
-
-    def _render_years(self):
-        self._fill_period_store(self.years_store, self._compute_periods("year"))
-
-    def _fill_period_store(self, store, periods):
-        self._fill_store(store, periods)
-
-    def _bind_period_card(self, item):
-        period = item.get_item()
-        box = item.get_child()
-        if not hasattr(box, "swatch"):
-            box = self._period_card_widget()
-            item.set_child(box)
-        box.swatch.set_size(self._card_cell_px())
-        box.swatch.set_placeholder(period.title)
-        box.swatch.set_path(period.cover_path or None)
-        box.title.set_label(period.title)
-        box.subtitle.set_label(period.subtitle)
-
-    def _period_card_widget(self):
-        # No fixed width: the card fills its grid column (see _size_grid) and the
-        # cover stays a 1:1 square at whatever width the column gives it.
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
-                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
-        box.set_cursor(POINTER_CURSOR)
-        box.add_css_class("card-box")
-        swatch = Swatch("", size=self._card_cell_px())
-        swatch.add_css_class("card-cover")
-        swatch.set_fill(True)  # fill the card width and stay square (1:1)
-        title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
-        subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
-        box.append(swatch)
-        box.append(title)
-        box.append(subtitle)
-        box.swatch, box.title, box.subtitle = swatch, title, subtitle
-        return box
 
     # ---------- context menus ----------
 
@@ -1217,7 +1081,7 @@ class EaselWindow(Adw.ApplicationWindow):
         up an Undo toast so it's a safe, one-click-back action."""
         now_hidden = not lib.is_hidden(self.con, photo_id)
         lib.set_photo_hidden(self.con, photo_id, now_hidden)
-        if self._info_photo_id == photo_id and now_hidden and not self._show_hidden:
+        if self._info_photo_id == photo_id and now_hidden:
             self._close_info()
         self._reload_all()
         if now_hidden:
@@ -1477,7 +1341,6 @@ class EaselWindow(Adw.ApplicationWindow):
     def _grid_and_source(self):
         return {
             "all_photos": (self.photo_grid, self._visible_photos),
-            "favourites": (self.fav_grid, self._visible_favs),
             "detail": (self.detail_photos_grid, self._detail_photos),
         }.get(self.view, (None, None))
 
@@ -1654,12 +1517,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_preview.set_path(row["path"], rotation=new)
         # Update just this photo's orientation in place — a full reload would
         # repopulate every grid and could disturb scroll/selection.
-        for lst in (self._photos_all, self._visible_photos, self._visible_favs,
-                    self._detail_photos):
+        for lst in (self._photos_all, self._visible_photos, self._detail_photos):
             for p in lst:
                 if p.id == pid:
                     p.rotation = new
-        for store in (self.photo_store, self.fav_store, self.detail_store):
+        for store in (self.photo_store, self.detail_store):
             for i in range(store.get_n_items()):
                 if store.get_item(i).id == pid:
                     item = store.get_item(i)
@@ -2284,7 +2146,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._show_lightbox_photo()
 
     def _open_photo_by_id(self, photo_id):
-        for source in (self._visible_photos, self._visible_favs, self._detail_photos):
+        for source in (self._visible_photos, self._detail_photos):
             for i, p in enumerate(source):
                 if p.id == photo_id:
                     self._open_lightbox(source, i)
@@ -2444,6 +2306,13 @@ class EaselWindow(Adw.ApplicationWindow):
             subtitle="Rescan automatically when files in your photo folders change")
         self.settings.bind("watch-folders", watch_row, "active", Gio.SettingsBindFlags.DEFAULT)
         folders.add(watch_row)
+        hidden_row = Adw.SwitchRow(
+            title="Show hidden album",
+            subtitle="Show a Hidden album in the Albums tab, where you can review "
+                     "and un-hide photos you've hidden")
+        self.settings.bind("show-hidden-album", hidden_row, "active",
+                           Gio.SettingsBindFlags.DEFAULT)
+        folders.add(hidden_row)
         page.add(folders)
 
         danger = Adw.PreferencesGroup(
@@ -2508,6 +2377,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self._monitors = []
         self._watch_debounce = 0
         self.settings.connect("changed::watch-folders", lambda *_: self._refresh_watchers())
+        # Toggling the Hidden album adds/removes its pinned card in the Albums tab.
+        self.settings.connect("changed::show-hidden-album", lambda *_: self._reload_all())
         self._refresh_watchers()
 
     # ---------- importing (files + drag-and-drop) ----------
@@ -2587,11 +2458,6 @@ class EaselWindow(Adw.ApplicationWindow):
     def _toast(self, text):
         self.toast_overlay.add_toast(Adw.Toast.new(text))
 
-    def _on_show_hidden(self, action, _param):
-        self._show_hidden = not self._show_hidden
-        action.set_state(GLib.Variant("b", self._show_hidden))
-        self._reload_all()
-
     def _select_tab(self, name, close_panel=True):
         # Switching tabs drops any selected photo and closes the info panel
         # (internal re-renders pass close_panel=False so a background reload
@@ -2600,15 +2466,11 @@ class EaselWindow(Adw.ApplicationWindow):
             self._close_info()
         self.view = name
         self._last_tab = name
-        if not self._photos_all and name in ("all_photos", "months", "years", "favourites"):
+        if not self._photos_all and name == "all_photos":
             self.paper_stack.set_visible_child_name("empty")
         else:
             self.paper_stack.set_visible_child_name(name)
-            if name == "months":
-                self._render_months()
-            elif name == "years":
-                self._render_years()
-            elif name == "map":
+            if name == "map":
                 self._render_map()
             elif name == "people":
                 self._render_people()
@@ -2620,11 +2482,13 @@ class EaselWindow(Adw.ApplicationWindow):
                 btn.remove_css_class("tab-active")
 
     def _activate_album_item(self, item):
-        """A card in the Albums grid (or a sub-folder card) was clicked: drill
+        """A card was clicked: open the Favourites/Hidden special album, drill
         into a folder node, or open a user-created album."""
         if item is None:
             return
-        if item.folder:
+        if item.special:
+            self._open_detail((item.special,))
+        elif item.folder:
             self._open_folder(item.path)
         else:
             self._open_album(item.id)
@@ -2638,9 +2502,6 @@ class EaselWindow(Adw.ApplicationWindow):
         if path not in (self._folder_nodes or {}):
             return
         self._open_detail(("folder", path))
-
-    def _open_period(self, kind, key, title):
-        self._open_detail(("period", kind, key, title))
 
     def _open_detail(self, source):
         self.view = "detail"
@@ -2659,7 +2520,7 @@ class EaselWindow(Adw.ApplicationWindow):
             if parent and parent in self._folder_nodes:
                 self._open_folder(parent)
                 return
-            self._select_tab("albums")
+            self._select_tab("folders")
             return
         self._select_tab(self._last_tab if self._last_tab in VIEW_NAMES else "all_photos")
 
@@ -2676,7 +2537,6 @@ class EaselWindow(Adw.ApplicationWindow):
             self._go_back()
             return
         subfolders = []       # folder cards shown above the photos (tree view)
-        extra_stats = []      # extra "N folders" style stats
         if source[0] == "album":
             album = lib.get_album(self.con, source[1])
             if not album:
@@ -2685,9 +2545,18 @@ class EaselWindow(Adw.ApplicationWindow):
             kind_label, title = "Album", album["title"]
             cover = album["cover_path"] or None
             photos = [self._photo_from_row(r)
-                      for r in lib.photos_by_album(self.con, album["id"],
-                                                   include_hidden=self._show_hidden)]
+                      for r in lib.photos_by_album(self.con, album["id"])]
             date = _fmt_date(album["date_taken"])
+        elif source[0] in ("favourites", "hidden"):
+            if source[0] == "favourites":
+                kind_label, title = "Album", "Favourites"
+                photos = [p for p in self._photos_all if p.favorite]
+            else:
+                kind_label, title = "Album", "Hidden"
+                photos = [self._photo_from_row(r)
+                          for r in lib.hidden_photos(self.con)]
+            cover = photos[0].path if photos else None
+            date = ""
         elif source[0] == "folder":
             node = (self._folder_nodes or {}).get(source[1])
             if not node:
@@ -2699,8 +2568,7 @@ class EaselWindow(Adw.ApplicationWindow):
             subfolders = self._folder_child_items(node)
             if node["album_id"]:
                 photos = [self._photo_from_row(r)
-                          for r in lib.photos_by_album(self.con, node["album_id"],
-                                                        include_hidden=self._show_hidden)]
+                          for r in lib.photos_by_album(self.con, node["album_id"])]
             else:
                 photos = []
             # Stats describe the whole subtree; the photos grid shows only the
@@ -2729,18 +2597,12 @@ class EaselWindow(Adw.ApplicationWindow):
                 return
             kind_label, title = "Person", person["name"]
             photos = [self._photo_from_row(r)
-                      for r in lib.photos_for_person(self.con, person["id"],
-                                                     include_hidden=self._show_hidden)]
+                      for r in lib.photos_for_person(self.con, person["id"])]
             cover = photos[0].path if photos else None
             date = ""
-        else:  # ("period", kind, key, title)
-            _, kind, key, title = source
-            kind_label = "Month" if kind == "month" else "Year"
-            photos = [p for p in self._visible_photos
-                      if self._period_of(p.date_taken, kind)[0] == key]
-            photos.sort(key=lambda p: p.date_taken)
-            cover = photos[-1].path if photos else None
-            date = ""
+        else:
+            self._go_back()
+            return
 
         self._render_subfolders(subfolders)  # empty for non-folder detail: hides it
         self.detail_kind_label.set_label(kind_label)
@@ -2782,7 +2644,7 @@ class EaselWindow(Adw.ApplicationWindow):
         """Pin every geotagged photo on the offline world map. The first time
         it's opened in a session we also read GPS from any photo that hasn't
         been checked yet (a background pass), then refresh the pins."""
-        rows = lib.photos_with_location(self.con, include_hidden=self._show_hidden)
+        rows = lib.photos_with_location(self.con)
         entries = [(r["lon"], r["lat"], self._photo_from_row(r)) for r in rows]
         self._map_view.set_photos(entries)
         self.map_stack.set_visible_child_name("view" if entries else "empty")
@@ -2904,12 +2766,16 @@ class EaselWindow(Adw.ApplicationWindow):
                                 if self._photo_matches(p, q)]
         self._fill_store(self.photo_store, self._visible_photos)
 
-        albums = [a for a in self._sorted_albums(self._albums_all)
-                  if not q or q in a.title.lower()]
-        self._fill_store(self.album_store, albums)
+        folders = [a for a in self._sorted_albums(self._folder_cards)
+                   if not q or q in a.title.lower()]
+        self._fill_store(self.folders_store, folders)
 
-        self._visible_favs = [p for p in self._visible_photos if p.favorite]
-        self._fill_store(self.fav_store, self._visible_favs)
+        # Albums keep the pinned specials (Favourites/Hidden) first, then the
+        # user albums sorted by name.
+        pinned = [a for a in self._albums_all if a.special]
+        rest = self._sorted_albums([a for a in self._albums_all if not a.special])
+        albums = [a for a in pinned + rest if not q or q in a.title.lower()]
+        self._fill_store(self.album_store, albums)
 
     # ---------- library loading ----------
 
@@ -2969,6 +2835,21 @@ class EaselWindow(Adw.ApplicationWindow):
         self._run_scan(lambda cb: lib.scan_folder(self.con, path, cb),
                        "Scanning folder…", refresh_watchers=True)
 
+    def _special_albums(self):
+        """The pinned albums at the top of the Albums tab: Favourites always,
+        and Hidden when the Settings switch is on."""
+        albums = []
+        favs = [p for p in self._photos_all if p.favorite]
+        albums.append(Album(title="Favourites", special="favourites", folder=False,
+                            photo_count=len(favs),
+                            cover_path=(favs[0].path if favs else "")))
+        if self.settings.get_boolean("show-hidden-album"):
+            hidden = lib.hidden_photos(self.con)
+            albums.append(Album(title="Hidden", special="hidden", folder=False,
+                                photo_count=len(hidden),
+                                cover_path=(hidden[0]["path"] if hidden else "")))
+        return albums
+
     def _photo_from_row(self, r):
         return Photo(id=r["id"], path=r["path"], album=r["album_title"] or "",
                      date_taken=r["date_taken"] or 0.0, favorite=bool(r["favorite"]),
@@ -2976,26 +2857,27 @@ class EaselWindow(Adw.ApplicationWindow):
                      rotation=(r["rotation"] or 0) if "rotation" in r.keys() else 0)
 
     def _reload_all(self):
-        self._photos_all = [self._photo_from_row(r)
-                            for r in lib.all_photos(self.con, include_hidden=self._show_hidden)]
-        # The folder tree drives the Albums view: it shows each watched root as a
-        # folder card (drill in to browse sub-folders), alongside user-created
-        # albums. "Add to" menus offer only the user albums (folders are physical).
+        # Hidden photos never appear in the normal views — only inside the
+        # Hidden album (see the "hidden" detail source).
+        self._photos_all = [self._photo_from_row(r) for r in lib.all_photos(self.con)]
+        # The folder tree drives the Folders view: each watched root is a folder
+        # card you drill into. The Albums view holds user-created albums, with
+        # Favourites (and Hidden, when enabled) pinned first.
         self._folder_nodes, self._folder_roots = lib.folder_tree(self.con)
+        self._folder_cards = []
+        for path in self._folder_roots:
+            node = self._folder_nodes[path]
+            self._folder_cards.append(Album(
+                id=node["album_id"] or 0, title=node["title"], path=node["path"],
+                photo_count=node["total"], cover_path=node["cover"] or "",
+                folder=True, subfolder_count=len(node["children"])))
         self._user_albums = [
             Album(id=r["id"], title=r["title"], path="",
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",
                   date_taken=r["date_taken"] or 0.0, folder=False)
             for r in lib.all_albums(self.con) if not r["path"]
         ]
-        root_cards = []
-        for path in self._folder_roots:
-            node = self._folder_nodes[path]
-            root_cards.append(Album(
-                id=node["album_id"] or 0, title=node["title"], path=node["path"],
-                photo_count=node["total"], cover_path=node["cover"] or "",
-                folder=True, subfolder_count=len(node["children"])))
-        self._albums_all = root_cards + self._user_albums
+        self._albums_all = self._special_albums() + self._user_albums
         self._persons_all = [
             Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
                    cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)

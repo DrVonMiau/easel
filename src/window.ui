@@ -17,10 +17,6 @@
         <attribute name="label" translatable="yes">Rescan Library</attribute>
         <attribute name="action">win.rescan</attribute>
       </item>
-      <item>
-        <attribute name="label" translatable="yes">Show Hidden Photos</attribute>
-        <attribute name="action">win.show-hidden</attribute>
-      </item>
     </section>
     <section>
       <item>
@@ -153,7 +149,7 @@
                         </style>
                         <child>
                           <object class="GtkButton" id="tab_all_photos">
-                            <property name="label" translatable="yes">Days</property>
+                            <property name="label" translatable="yes">All photos</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -161,8 +157,16 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="tab_months">
-                            <property name="label" translatable="yes">Months</property>
+                          <object class="GtkLabel">
+                            <property name="label">|</property>
+                            <style>
+                              <class name="tab-sep"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_folders">
+                            <property name="label" translatable="yes">Folders</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -170,8 +174,8 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="tab_years">
-                            <property name="label" translatable="yes">Years</property>
+                          <object class="GtkButton" id="tab_albums">
+                            <property name="label" translatable="yes">Albums</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -198,32 +202,6 @@
                         <child>
                           <object class="GtkButton" id="tab_map">
                             <property name="label" translatable="yes">Map</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkLabel">
-                            <property name="label">|</property>
-                            <style>
-                              <class name="tab-sep"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_albums">
-                            <property name="label" translatable="yes">Albums</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_favourites">
-                            <property name="label" translatable="yes">Favourites</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -376,7 +354,7 @@
 
                     <child>
                       <object class="GtkStackPage">
-                        <property name="name">months</property>
+                        <property name="name">folders</property>
                         <property name="child">
                           <object class="GtkScrolledWindow">
                             <property name="hscrollbar-policy">never</property>
@@ -384,32 +362,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkBox" id="months_box">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">4</property>
-                                <property name="margin-top">8</property>
-                                <property name="margin-bottom">8</property>
-                                <property name="margin-start">24</property>
-                                <property name="margin-end">24</property>
-                                <property name="valign">start</property>
-                              </object>
-                            </property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">years</property>
-                        <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkGridView" id="years_grid">
+                              <object class="GtkGridView" id="folders_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
@@ -445,33 +398,6 @@
                                 <property name="margin-start">24</property>
                                 <property name="margin-end">24</property>
                                 <property name="single-click-activate">true</property>
-                                <style>
-                                  <class name="card-grid"/>
-                                </style>
-                              </object>
-                            </property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">favourites</property>
-                        <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkGridView" id="fav_grid">
-                                <property name="min-columns">2</property>
-                                <property name="max-columns">12</property>
-                                <property name="margin-top">24</property>
-                                <property name="margin-bottom">1</property>
-                                <property name="margin-start">24</property>
-                                <property name="margin-end">24</property>
                                 <style>
                                   <class name="card-grid"/>
                                 </style>

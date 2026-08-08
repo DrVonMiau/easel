@@ -841,6 +841,15 @@ def backfill_locations(con, progress_cb=None):
     return found
 
 
+def hidden_photos(con):
+    """Every hidden photo, newest first — the contents of the Hidden album."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE photos.hidden=1
+            ORDER BY photos.date_taken DESC, photos.path"""
+    ).fetchall()
+
+
 def photos_with_location(con, include_hidden=False):
     """Every geotagged photo, newest first — the data the Map view pins."""
     return con.execute(

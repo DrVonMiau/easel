@@ -27,6 +27,9 @@ class Album(GObject.Object):
     date_taken = GObject.Property(type=float, default=0.0)
     folder = GObject.Property(type=bool, default=False)
     subfolder_count = GObject.Property(type=int, default=0)
+    # "" for a normal album/folder, or "favourites" / "hidden" for the pinned
+    # special albums shown in the Albums tab.
+    special = GObject.Property(type=str, default="")
 
 
 class Person(GObject.Object):
