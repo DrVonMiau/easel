@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -2509,34 +2510,20 @@ class EaselWindow(Adw.ApplicationWindow):
         return True
 
     def _import_paths(self, paths):
-        """Index dropped/opened files: media files individually, folders as
-        watched photo folders. Runs off the main thread; scanning can be slow."""
+        """Index dropped files: media files individually, folders as watched
+        photo folders. Runs off the main thread with a progress toast."""
         if not paths:
             return
-        self._toast("Importing…")
 
-        def work():
-            count = 0
+        def scan(progress):
             for path in paths:
                 if os.path.isdir(path):
                     lib.add_folder(self.con, path)
-                    lib.scan_folder(self.con, path)
-                    count += 1
+                    lib.scan_folder(self.con, path, progress)
                 elif os.path.splitext(path)[1].lower() in lib.MEDIA_EXT:
                     lib.scan_file(self.con, path)
-                    count += 1
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._refresh_watchers)
-            GLib.idle_add(lambda: self._toast_imported(count))
 
-        threading.Thread(target=work, daemon=True).start()
-
-    def _toast_imported(self, count):
-        if count:
-            self._toast(f"Imported {count} item{'s' if count != 1 else ''}")
-        else:
-            self._toast("Nothing to import")
-        return False
+        self._run_scan(scan, "Importing…", refresh_watchers=True)
 
     def _refresh_watchers(self):
         for monitor in self._monitors:
@@ -2941,18 +2928,44 @@ class EaselWindow(Adw.ApplicationWindow):
         dialog = Gtk.FileDialog()
         dialog.select_folder(self, None, self._folder_chosen)
 
-    def _on_rescan(self):
-        self._toast("Rescanning library…")
+    def _run_scan(self, scan_fn, start_msg, refresh_watchers=False):
+        """Run a scan on a worker thread while a single, persistent toast shows
+        live progress ("Scanning… 1,234 of 7,000"), so a big import never looks
+        stuck. scan_fn(progress_cb) does the work; progress_cb(done, total) is
+        called from the worker and throttled onto the main thread."""
+        toast = Adw.Toast.new(start_msg)
+        toast.set_timeout(0)  # stays until we dismiss it
+        self.toast_overlay.add_toast(toast)
+        state = {"last": 0.0}
+
+        def progress(done, total):
+            now = time.monotonic()
+            if not total or (done < total and now - state["last"] < 0.1):
+                return
+            state["last"] = now
+            GLib.idle_add(
+                lambda: toast.set_title(f"Scanning… {done:,} of {total:,}") or False)
 
         def work():
-            lib.scan_all(self.con)
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._toast_photo_count)
+            scan_fn(progress)
+
+            def finish():
+                toast.dismiss()
+                self._reload_all()
+                if refresh_watchers:
+                    self._refresh_watchers()
+                self._toast_photo_count()
+                return False
+
+            GLib.idle_add(finish)
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _on_rescan(self):
+        self._run_scan(lambda cb: lib.scan_all(self.con, cb), "Rescanning library…")
+
     def _toast_photo_count(self):
-        self._toast(f"Library updated — {len(self._photos_all)} photos")
+        self._toast(f"Library updated — {len(self._photos_all):,} photos")
         return False
 
     def _folder_chosen(self, dialog, result):
@@ -2964,15 +2977,8 @@ class EaselWindow(Adw.ApplicationWindow):
             return
         path = folder.get_path()
         lib.add_folder(self.con, path)
-        self._toast("Scanning folder…")
-
-        def work():
-            lib.scan_folder(self.con, path)
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._refresh_watchers)
-            GLib.idle_add(self._toast_photo_count)
-
-        threading.Thread(target=work, daemon=True).start()
+        self._run_scan(lambda cb: lib.scan_folder(self.con, path, cb),
+                       "Scanning folder…", refresh_watchers=True)
 
     def _photo_from_row(self, r):
         return Photo(id=r["id"], path=r["path"], album=r["album_title"] or "",
