@@ -225,10 +225,135 @@ def request_thumbnail(path, size, wants, callback, rotation=0):
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    if _is_video(path):
+        # Videos can't be decoded as images; a frame is grabbed with GStreamer
+        # off the main thread and cached, then loaded like any other thumbnail.
+        _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback)
+        return None
     _load_stack.append((path, size, rotation, key, wants, callback))
     if not _load_idle_id:
         _load_idle_id = GLib.idle_add(_process_load_stack)
     return None
+
+
+_VIDEO_EXT = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv",
+              ".3gp", ".mpg", ".mpeg", ".ogv", ".ts", ".mts"}
+_video_pool = None
+_video_inflight = set()
+
+
+def _is_video(path):
+    return os.path.splitext(path)[1].lower() in _VIDEO_EXT
+
+
+def _load_cache_texture(cache_file):
+    try:
+        return Gdk.Texture.new_from_filename(cache_file)
+    except Exception:
+        return None
+
+
+def _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback):
+    """Serve a video's poster frame: from the PNG cache if present, else bake it
+    on a small background pool (GStreamer + GSK scale, both thread-safe) and
+    deliver it on the main thread. Any failure leaves the placeholder."""
+    global _video_pool
+    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
+    cache_file = _thumb_cache_file(path, dim, rotation, mtime)
+    if os.path.exists(cache_file):
+        tex = _load_cache_texture(cache_file)
+        if tex is not None:
+            _cache_put(key, tex)
+        callback(path, tex)
+        return
+    if path in _video_inflight:      # already being baked; placeholder for now
+        callback(path, None)
+        return
+    _video_inflight.add(path)
+    if _video_pool is None:
+        import concurrent.futures
+        _video_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    def work():
+        # Only the GStreamer decode/seek (bounded, its own threads) runs here.
+        try:
+            frame = _extract_video_frame(path)
+        except Exception:
+            frame = None
+
+        def done():
+            # Scale, cache and load happen on the main thread — same GSK/decode
+            # path as images, which isn't reliable off-thread.
+            _video_inflight.discard(path)
+            tex = None
+            if frame is not None and (wants is None or wants()):
+                try:
+                    scaled = _render_texture(frame, rotation, max_dim=dim)
+                    if scaled is not None and _texture_to_cache(scaled, cache_file):
+                        tex = _load_cache_texture(cache_file)
+                except Exception:
+                    tex = None
+                if tex is not None:
+                    _cache_put(key, tex)
+            callback(path, tex)
+            return False
+
+        GLib.idle_add(done)
+
+    _video_pool.submit(work)
+
+
+def _extract_video_frame(path):
+    """A representative frame of a video as a Gdk.Texture, or None. Uses a short,
+    bounded GStreamer pipeline; safe to call off the main thread."""
+    import gi
+    try:
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+    except (ValueError, ImportError):
+        return None
+    if not Gst.is_initialized():
+        Gst.init(None)
+    pipeline = Gst.parse_launch(
+        "uridecodebin name=src ! videoconvert ! videoscale ! "
+        "appsink name=sink caps=video/x-raw,format=RGB,pixel-aspect-ratio=1/1")
+    src = pipeline.get_by_name("src")
+    src.set_property("uri", Gst.filename_to_uri(path))
+    sink = pipeline.get_by_name("sink")
+    sink.set_property("sync", False)
+    try:
+        pipeline.set_state(Gst.State.PAUSED)
+        res, _state, _p = pipeline.get_state(5 * Gst.SECOND)
+        if res != Gst.StateChangeReturn.SUCCESS:
+            return None
+        ok, dur = pipeline.query_duration(Gst.Format.TIME)
+        if ok and dur > 0:                       # a second in, or a third of the way
+            pos = min(int(1 * Gst.SECOND), dur // 3)
+            if pos > 0:
+                pipeline.seek_simple(
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, pos)
+                pipeline.get_state(5 * Gst.SECOND)
+        sample = sink.emit("pull-preroll")
+        if sample is None:
+            return None
+        struct = sample.get_caps().get_structure(0)
+        w = struct.get_value("width")
+        h = struct.get_value("height")
+        if not w or not h:
+            return None
+        buf = sample.get_buffer()
+        ok, minfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return None
+        try:
+            data = GLib.Bytes.new(bytes(minfo.data))
+        finally:
+            buf.unmap(minfo)
+        stride = ((w * 3 + 3) // 4) * 4          # GStreamer pads RGB rows to 4 bytes
+        return Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8, data, stride)
+    finally:
+        pipeline.set_state(Gst.State.NULL)
 
 
 def load_full_texture(path, rotation=0):
