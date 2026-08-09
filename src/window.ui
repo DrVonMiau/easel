@@ -507,71 +507,74 @@
                       <object class="GtkStackPage">
                         <property name="name">detail</property>
                         <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkBox" id="detail_box">
-                                <property name="orientation">vertical</property>
-                                <property name="valign">start</property>
-                                <property name="vexpand">false</property>
+                          <object class="GtkBox" id="detail_box">
+                            <property name="orientation">vertical</property>
 
+                            <!-- Header + sub-folders are fixed; only the photos
+                                 grid scrolls, as the scroller's DIRECT child, so
+                                 GtkGridView is scroll-managed and never spreads
+                                 its rows to fill leftover height. -->
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">24</property>
+                                <property name="margin-top">24</property>
+                                <property name="margin-bottom">8</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
+                                <child>
+                                  <object class="GtkBox" id="detail_hero_slot"/>
+                                </child>
                                 <child>
                                   <object class="GtkBox">
-                                    <property name="orientation">horizontal</property>
-                                    <property name="spacing">24</property>
-                                    <property name="margin-top">24</property>
-                                    <property name="margin-bottom">8</property>
-                                    <property name="margin-start">24</property>
-                                    <property name="margin-end">24</property>
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">6</property>
+                                    <property name="valign">center</property>
                                     <child>
-                                      <object class="GtkBox" id="detail_hero_slot"/>
+                                      <object class="GtkLabel" id="detail_name_label">
+                                        <property name="xalign">0</property>
+                                        <style>
+                                          <class name="artist-heading"/>
+                                        </style>
+                                      </object>
                                     </child>
                                     <child>
-                                      <object class="GtkBox">
-                                        <property name="orientation">vertical</property>
-                                        <property name="spacing">6</property>
-                                        <property name="valign">center</property>
-                                        <child>
-                                          <object class="GtkLabel" id="detail_name_label">
-                                            <property name="xalign">0</property>
-                                            <style>
-                                              <class name="artist-heading"/>
-                                            </style>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="GtkLabel" id="detail_stats_label">
-                                            <property name="xalign">0</property>
-                                            <style>
-                                              <class name="mono-dim"/>
-                                            </style>
-                                          </object>
-                                        </child>
+                                      <object class="GtkLabel" id="detail_stats_label">
+                                        <property name="xalign">0</property>
+                                        <style>
+                                          <class name="mono-dim"/>
+                                        </style>
                                       </object>
                                     </child>
                                   </object>
                                 </child>
+                              </object>
+                            </child>
 
-                                <child>
-                                  <object class="EaselGridView" id="detail_folders_grid">
-                                    <property name="visible">false</property>
-                                    <property name="min-columns">2</property>
-                                    <property name="max-columns">8</property>
-                                    <property name="margin-top">16</property>
-                                    <property name="margin-start">24</property>
-                                    <property name="margin-end">24</property>
-                                    <property name="valign">start</property>
-                                    <property name="vexpand">false</property>
-                                    <style>
-                                      <class name="card-grid"/>
-                                    </style>
-                                  </object>
-                                </child>
+                            <child>
+                              <object class="EaselGridView" id="detail_folders_grid">
+                                <property name="visible">false</property>
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">16</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
+                                <property name="valign">start</property>
+                                <property name="vexpand">false</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </child>
 
-                                <child>
+                            <child>
+                              <object class="GtkScrolledWindow">
+                                <property name="hscrollbar-policy">never</property>
+                                <property name="vexpand">true</property>
+                                <style>
+                                  <class name="om-scroll"/>
+                                </style>
+                                <property name="child">
                                   <object class="EaselGridView" id="detail_photos_grid">
                                     <property name="min-columns">2</property>
                                     <property name="max-columns">12</property>
@@ -580,14 +583,13 @@
                                     <property name="margin-start">24</property>
                                     <property name="margin-end">24</property>
                                     <property name="valign">start</property>
-                                    <property name="vexpand">false</property>
                                     <style>
                                       <class name="card-grid"/>
                                     </style>
                                   </object>
-                                </child>
+                                </property>
                               </object>
-                            </property>
+                            </child>
                           </object>
                         </property>
                       </object>
