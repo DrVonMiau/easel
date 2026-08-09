@@ -515,6 +515,8 @@
                             <property name="child">
                               <object class="GtkBox" id="detail_box">
                                 <property name="orientation">vertical</property>
+                                <property name="valign">start</property>
+                                <property name="vexpand">false</property>
 
                                 <child>
                                   <object class="GtkBox">
@@ -562,6 +564,7 @@
                                     <property name="margin-start">24</property>
                                     <property name="margin-end">24</property>
                                     <property name="valign">start</property>
+                                    <property name="vexpand">false</property>
                                     <style>
                                       <class name="card-grid"/>
                                     </style>
@@ -577,6 +580,7 @@
                                     <property name="margin-start">24</property>
                                     <property name="margin-end">24</property>
                                     <property name="valign">start</property>
+                                    <property name="vexpand">false</property>
                                     <style>
                                       <class name="card-grid"/>
                                     </style>
