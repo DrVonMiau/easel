@@ -437,37 +437,44 @@ class EaselWindow(Adw.ApplicationWindow):
             return self._card_cell
         return self._estimate_cell(4, 2 * self.CARD_MARGIN)
 
-    def _estimate_cell(self, n, gap):
-        # Pre-realisation fallback: derive the paper width from the surface the
-        # same way _apply_layout_metrics does, so the first paint is close.
+    def _estimate_paper_width(self):
+        # The paper-stack width derived from the surface the same way
+        # _apply_layout_metrics lays it out — the fallback before the real
+        # paper_stack has been allocated (first paint).
         w = self._surface_width or 1180
         margin_x = max(SPACE_L, round(w * 0.05))
         paper = w - 2 * margin_x
         if self.info_revealer.get_reveal_child():
             paper -= round(w * 0.04) + self.PANEL_WIDTH
-        content = max(240, paper - 2 * self.GRID_MARGIN)
+        return max(240 + 2 * self.GRID_MARGIN, paper)
+
+    def _estimate_cell(self, n, gap):
+        content = self._estimate_paper_width() - 2 * self.GRID_MARGIN
         return max(120, (content // max(1, n)) - gap)
 
     def _setup_grid_sizing(self):
-        # Every grid is an EaselGridView that hands us its real content width the
-        # instant it's allocated — the one reliable trigger (resize, panel
-        # toggle, scrollbar, stack transition), including for grids nested in a
-        # box. We size squares from that width.
-        self._grid_labels = {
-            self.photo_grid: "photos", self.detail_photos_grid: "detail-photos",
-            self.folders_grid: "folders", self.album_grid: "albums",
-            self.detail_folders_grid: "subfolders", self.people_grid: "people",
-        }
-        self._grid_dbg_seen = set()
+        # An EaselGridView reports its allocation as a re-size trigger, but the
+        # width itself always comes from the shared paper stack, so every grid
+        # in every view/folder is sized identically (see _grid_content_width).
         for grid in self._photo_grids() + self._card_grids():
             grid.set_width_cb(self._size_grid)
 
-    def _size_grid(self, grid, width=None):
-        """Force exact columns and square swatches for one grid from its real
-        content width (passed by EaselGridView on allocation, or read live)."""
-        w = width if width is not None else grid.get_width()
+    def _grid_content_width(self):
+        """The width available to a grid's cells — identical for every grid,
+        because they're all pages of the same paper stack. Using this one stable
+        source (instead of each grid's own, unreliably-timed allocation) is what
+        makes every view and every folder lay out the same. The 2x GRID_MARGIN
+        is the 24px margin each grid carries in the .ui."""
+        w = self.paper_stack.get_width()
         if w <= 1:
-            return
+            w = self._estimate_paper_width()
+        return max(1, w - 2 * self.GRID_MARGIN)
+
+    def _size_grid(self, grid, width=None):
+        """Force exact columns and square swatches for one grid. The width comes
+        from the shared paper stack (see _grid_content_width), never the grid's
+        own allocation, so all grids stay consistent."""
+        w = self._grid_content_width()
         if grid in self._photo_grids():
             n = max(1, min(self._MAX_COLS, self._columns_for_thumb()))
             # A tile's swatch fills the column minus its trailing gap, so its
@@ -479,19 +486,8 @@ class EaselWindow(Adw.ApplicationWindow):
             # A card's cover fills the column minus the card's side margins.
             cell = max(1, (w // n) - 2 * self.CARD_MARGIN)
             self._card_cell = cell
-        # Temporary diagnostic (safe to remove): prints each grid's real width,
-        # column count and cell size once per distinct value, so a mis-sized
-        # folder can be pinpointed from the terminal.
-        sig = (id(grid), w, n, cell)
-        if sig not in self._grid_dbg_seen:
-            self._grid_dbg_seen.add(sig)
-            label = self._grid_labels.get(grid, "?")
-            print(f"[easel-grid] {label} view={self.view} width={w} columns={n} "
-                  f"cell={cell}", file=sys.stderr)
-        # Applied on idle: this runs from within the grid's size-allocate, so
-        # changing columns / child sizes inline would re-enter layout. The
-        # captured (n, cell) are correct regardless of when the idle fires, and
-        # the guards below make a converged pass a no-op (no spin).
+        # Applied on idle: this can run from within the grid's size-allocate, so
+        # changing columns / child sizes inline would re-enter layout.
         GLib.idle_add(self._apply_grid_size, grid, n, cell)
 
     def _apply_grid_size(self, grid, n, cell):
