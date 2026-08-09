@@ -39,6 +39,29 @@
 		<control>pointing</control>
 	</supports>
 	<releases>
+		<release version="0.4.0" date="2026-08-09">
+			<description>
+				<p>Folders, and a calmer, faster library.</p>
+				<ul>
+					<li>Browse by folder: the new Folders view mirrors the folders on your disk, and opening one shows its sub-folders and photos — Easel reads your folders in place and never moves or imports anything</li>
+					<li>Streamlined views: All photos, Folders, Albums, People and Map</li>
+					<li>Favourites and Hidden are pinned albums; hide a photo to tuck it away, or move it to the system Trash from the menu</li>
+					<li>Video thumbnails, and smoother playback</li>
+					<li>A more detailed offline map with major rivers, roads and cities</li>
+					<li>Faster loading and scrolling for large libraries, with progress while a folder is scanned</li>
+				</ul>
+			</description>
+		</release>
+		<release version="0.3.0" date="2026-07-28">
+			<description>
+				<p>Places and people.</p>
+				<ul>
+					<li>A Map view that places your photos by the GPS location in their metadata, on a zoomable offline world map (land, lakes and country borders) — no network needed</li>
+					<li>Photos from the same place gather into one pin with a count; click it to open them all</li>
+					<li>People: tag someone by name right on a photo, then browse every photo they're in</li>
+				</ul>
+			</description>
+		</release>
 		<release version="0.2.0" date="2026-07-28">
 			<description>
 				<p>Editing and importing arrive.</p>

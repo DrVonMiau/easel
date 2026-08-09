@@ -6,10 +6,6 @@
   <menu id="primary_menu">
     <section>
       <item>
-        <attribute name="label" translatable="yes">Add Photos…</attribute>
-        <attribute name="action">win.add-photos</attribute>
-      </item>
-      <item>
         <attribute name="label" translatable="yes">Add Photo Folder…</attribute>
         <attribute name="action">win.add-folder</attribute>
       </item>
@@ -153,25 +149,7 @@
                         </style>
                         <child>
                           <object class="GtkButton" id="tab_all_photos">
-                            <property name="label" translatable="yes">Days</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_months">
-                            <property name="label" translatable="yes">Months</property>
-                            <style>
-                              <class name="flat"/>
-                              <class name="tab-btn"/>
-                            </style>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkButton" id="tab_years">
-                            <property name="label" translatable="yes">Years</property>
+                            <property name="label" translatable="yes">All photos</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -187,6 +165,15 @@
                           </object>
                         </child>
                         <child>
+                          <object class="GtkButton" id="tab_folders">
+                            <property name="label" translatable="yes">Folders</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
                           <object class="GtkButton" id="tab_albums">
                             <property name="label" translatable="yes">Albums</property>
                             <style>
@@ -196,8 +183,25 @@
                           </object>
                         </child>
                         <child>
-                          <object class="GtkButton" id="tab_favourites">
-                            <property name="label" translatable="yes">Favourites</property>
+                          <object class="GtkLabel">
+                            <property name="label">|</property>
+                            <style>
+                              <class name="tab-sep"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_people">
+                            <property name="label" translatable="yes">People</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="tab-btn"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="tab_map">
+                            <property name="label" translatable="yes">Map</property>
                             <style>
                               <class name="flat"/>
                               <class name="tab-btn"/>
@@ -223,18 +227,6 @@
                     </property>
                   </object>
                 </child>
-              </object>
-            </child>
-            <child>
-              <object class="GtkMenuButton" id="sort_btn">
-                <property name="icon-name">easel-sort-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Sort</property>
-                <property name="valign">center</property>
-                <style>
-                  <class name="flat"/>
-                  <class name="circular"/>
-                  <class name="titlebar-icon"/>
-                </style>
               </object>
             </child>
             <child>
@@ -315,12 +307,11 @@
                         <property name="name">empty</property>
                         <property name="child">
                           <object class="AdwStatusPage">
-                            <property name="icon-name">image-x-generic-symbolic</property>
-                            <property name="title" translatable="yes">No Photos Yet</property>
-                            <property name="description" translatable="yes">Add a folder and Easel will scan it for photos.</property>
+                            <property name="title" translatable="yes">No photos yet</property>
+                            <property name="description" translatable="yes">Add a folder and Easel will scan it for photos</property>
                             <property name="child">
                               <object class="GtkButton">
-                                <property name="label" translatable="yes">Add Photo Folder…</property>
+                                <property name="label" translatable="yes">Select folder</property>
                                 <property name="halign">center</property>
                                 <property name="action-name">win.add-folder</property>
                                 <style>
@@ -344,7 +335,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="photo_grid">
+                              <object class="EaselGridView" id="photo_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">12</property>
                                 <property name="margin-top">24</property>
@@ -363,7 +354,7 @@
 
                     <child>
                       <object class="GtkStackPage">
-                        <property name="name">months</property>
+                        <property name="name">folders</property>
                         <property name="child">
                           <object class="GtkScrolledWindow">
                             <property name="hscrollbar-policy">never</property>
@@ -371,35 +362,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="months_grid">
-                                <property name="min-columns">2</property>
-                                <property name="max-columns">8</property>
-                                <property name="margin-top">24</property>
-                                <property name="margin-bottom">1</property>
-                                <property name="margin-start">24</property>
-                                <property name="margin-end">24</property>
-                                <property name="single-click-activate">true</property>
-                                <style>
-                                  <class name="card-grid"/>
-                                </style>
-                              </object>
-                            </property>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-
-                    <child>
-                      <object class="GtkStackPage">
-                        <property name="name">years</property>
-                        <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkGridView" id="years_grid">
+                              <object class="EaselGridView" id="folders_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
@@ -427,7 +390,7 @@
                               <class name="om-scroll"/>
                             </style>
                             <property name="child">
-                              <object class="GtkGridView" id="album_grid">
+                              <object class="EaselGridView" id="album_grid">
                                 <property name="min-columns">2</property>
                                 <property name="max-columns">8</property>
                                 <property name="margin-top">24</property>
@@ -447,26 +410,94 @@
 
                     <child>
                       <object class="GtkStackPage">
-                        <property name="name">favourites</property>
+                        <property name="name">map</property>
                         <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkGridView" id="fav_grid">
-                                <property name="min-columns">2</property>
-                                <property name="max-columns">12</property>
-                                <property name="margin-top">24</property>
-                                <property name="margin-bottom">1</property>
-                                <property name="margin-start">24</property>
-                                <property name="margin-end">24</property>
-                                <style>
-                                  <class name="card-grid"/>
-                                </style>
+                          <object class="GtkStack" id="map_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">120</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage">
+                                    <property name="icon-name">easel-map-symbolic</property>
+                                    <property name="title" translatable="yes">No places yet</property>
+                                    <property name="description" translatable="yes">Photos with GPS location appear here, pinned on a world map. Import photos that carry location data to see them placed.</property>
+                                  </object>
+                                </property>
                               </object>
-                            </property>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">view</property>
+                                <property name="child">
+                                  <object class="GtkBox" id="map_slot">
+                                    <property name="orientation">vertical</property>
+                                    <property name="hexpand">true</property>
+                                    <property name="vexpand">true</property>
+                                    <property name="overflow">hidden</property>
+                                    <property name="margin-top">24</property>
+                                    <property name="margin-bottom">24</property>
+                                    <property name="margin-start">24</property>
+                                    <property name="margin-end">24</property>
+                                    <style>
+                                      <class name="map-slot"/>
+                                    </style>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">people</property>
+                        <property name="child">
+                          <object class="GtkStack" id="people_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">120</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage">
+                                    <property name="icon-name">easel-people-symbolic</property>
+                                    <property name="title" translatable="yes">No people yet</property>
+                                    <property name="description" translatable="yes">Tag someone in a photo — open a photo's info and add a name — and they'll show up here, gathering every photo they're in.</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">view</property>
+                                <property name="child">
+                                  <object class="GtkScrolledWindow">
+                                    <property name="hscrollbar-policy">never</property>
+                                    <style>
+                                      <class name="om-scroll"/>
+                                    </style>
+                                    <property name="child">
+                                      <object class="EaselGridView" id="people_grid">
+                                        <property name="min-columns">2</property>
+                                        <property name="max-columns">8</property>
+                                        <property name="margin-top">24</property>
+                                        <property name="margin-bottom">1</property>
+                                        <property name="margin-start">24</property>
+                                        <property name="margin-end">24</property>
+                                        <property name="single-click-activate">true</property>
+                                        <style>
+                                          <class name="card-grid"/>
+                                        </style>
+                                      </object>
+                                    </property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
                           </object>
                         </property>
                       </object>
@@ -476,57 +507,78 @@
                       <object class="GtkStackPage">
                         <property name="name">detail</property>
                         <property name="child">
-                          <object class="GtkScrolledWindow">
-                            <property name="hscrollbar-policy">never</property>
-                            <style>
-                              <class name="om-scroll"/>
-                            </style>
-                            <property name="child">
-                              <object class="GtkBox" id="detail_box">
-                                <property name="orientation">vertical</property>
+                          <object class="GtkBox" id="detail_box">
+                            <property name="orientation">vertical</property>
 
+                            <!-- Header + sub-folders are fixed; only the photos
+                                 grid scrolls, as the scroller's DIRECT child, so
+                                 GtkGridView is scroll-managed and never spreads
+                                 its rows to fill leftover height. -->
+                            <child>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">24</property>
+                                <property name="margin-top">24</property>
+                                <property name="margin-bottom">8</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
+                                <child>
+                                  <object class="GtkBox" id="detail_hero_slot"/>
+                                </child>
                                 <child>
                                   <object class="GtkBox">
-                                    <property name="orientation">horizontal</property>
-                                    <property name="spacing">24</property>
-                                    <property name="margin-top">24</property>
-                                    <property name="margin-bottom">8</property>
-                                    <property name="margin-start">24</property>
-                                    <property name="margin-end">24</property>
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">6</property>
+                                    <property name="valign">center</property>
                                     <child>
-                                      <object class="GtkBox" id="detail_hero_slot"/>
+                                      <object class="GtkLabel" id="detail_name_label">
+                                        <property name="xalign">0</property>
+                                        <style>
+                                          <class name="artist-heading"/>
+                                        </style>
+                                      </object>
                                     </child>
                                     <child>
-                                      <object class="GtkBox">
-                                        <property name="orientation">vertical</property>
-                                        <property name="spacing">6</property>
-                                        <property name="valign">center</property>
-                                        <child>
-                                          <object class="GtkLabel" id="detail_name_label">
-                                            <property name="xalign">0</property>
-                                            <style>
-                                              <class name="artist-heading"/>
-                                            </style>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="GtkLabel" id="detail_stats_label">
-                                            <property name="xalign">0</property>
-                                            <style>
-                                              <class name="mono-dim"/>
-                                            </style>
-                                          </object>
-                                        </child>
+                                      <object class="GtkLabel" id="detail_stats_label">
+                                        <property name="xalign">0</property>
+                                        <style>
+                                          <class name="mono-dim"/>
+                                        </style>
                                       </object>
                                     </child>
                                   </object>
                                 </child>
+                              </object>
+                            </child>
 
-                                <child>
-                                  <object class="GtkGridView" id="detail_photos_grid">
+                            <child>
+                              <object class="EaselGridView" id="detail_folders_grid">
+                                <property name="visible">false</property>
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">16</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
+                                <property name="valign">start</property>
+                                <property name="vexpand">false</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </child>
+
+                            <child>
+                              <object class="GtkScrolledWindow">
+                                <property name="hscrollbar-policy">never</property>
+                                <property name="vexpand">true</property>
+                                <style>
+                                  <class name="om-scroll"/>
+                                </style>
+                                <property name="child">
+                                  <object class="EaselGridView" id="detail_photos_grid">
                                     <property name="min-columns">2</property>
                                     <property name="max-columns">12</property>
-                                    <property name="margin-top">20</property>
+                                    <property name="margin-top">24</property>
                                     <property name="margin-bottom">1</property>
                                     <property name="margin-start">24</property>
                                     <property name="margin-end">24</property>
@@ -535,9 +587,9 @@
                                       <class name="card-grid"/>
                                     </style>
                                   </object>
-                                </child>
+                                </property>
                               </object>
-                            </property>
+                            </child>
                           </object>
                         </property>
                       </object>

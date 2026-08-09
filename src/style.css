@@ -198,9 +198,18 @@ checkbutton radio:checked {
   color: alpha(@window_fg_color, 0.12);
 }
 
-/* Flat thumbnails — no drop shadow, and no lift/shadow on hover (the tiles
-   sit cleanly on the paper; hover feedback comes from the action buttons). */
-.swatch.card-swatch {
+/* Photo thumbnails in the Days / album / month grids: sharp square corners,
+   no border or shadow — the cropped images sit edge-to-edge with a 1px gap. */
+.swatch.photo-tile {
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+
+/* Cover thumbnails on Months / Years / Albums / People cards: a 1:1 square
+   with 8px rounded corners, flat. */
+.swatch.card-cover {
+  border-radius: 8px;
   box-shadow: none;
 }
 
@@ -229,7 +238,7 @@ checkbutton radio:checked {
 }
 
 /* Blue selection ring on the tile whose photo is open in the info panel. */
-.card-box.tile-selected .card-swatch {
+.card-box.tile-selected .photo-tile {
   box-shadow: 0 0 0 3px @easel_blue;
 }
 
@@ -264,6 +273,14 @@ gridview.card-grid > child:focus {
   font-weight: 600;
   color: @window_fg_color;
   letter-spacing: -0.01em;
+}
+
+/* Year separator heading in the Months view. */
+.year-header {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: @window_fg_color;
 }
 
 /* ---------- lightbox ---------- */
@@ -548,7 +565,7 @@ window.dark .tile-fav.faved {
   color: @easel_gold_light;
 }
 
-window.dark .card-box.tile-selected .card-swatch {
+window.dark .card-box.tile-selected .photo-tile {
   box-shadow: 0 0 0 3px @easel_blue_light;
 }
 
@@ -745,3 +762,50 @@ window.dark .editor-scale slider {
 
 /* The centre-origin dot marking each slider's neutral value is painted by
    EaselAdjustScale in do_snapshot (on top of the fill), not via CSS marks. */
+
+/* ============================================================================
+   MAP + PEOPLE
+   ============================================================================ */
+
+/* The Map view fills the paper with a soft rounded panel. Overflow is hidden
+   so the vector map is clipped to the rounded corners. The world and its pins
+   are drawn by EaselMapView in do_snapshot. */
+.map-slot {
+  background-color: alpha(@window_fg_color, 0.03);
+  border-radius: 16px;               /* radius token: card = 16 */
+}
+
+/* "In this photo": the tagged names as a right-aligned, comma-separated value
+   in the panel's own mono style (matching .info-value). Each name underlines
+   and picks up the accent on hover — click opens the person, right-click
+   removes. */
+.person-name,
+.person-add {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: alpha(@window_fg_color, 0.55);
+}
+
+.person-name:hover {
+  color: @easel_blue;
+  text-decoration: underline;
+}
+
+/* The add-name affordance reads as an action from the start (accent tint),
+   and confirms on hover. */
+.person-add {
+  color: @easel_blue;
+}
+
+.person-add:hover {
+  text-decoration: underline;
+}
+
+window.dark .person-name:hover,
+window.dark .person-add {
+  color: @easel_blue_light;
+}
+
+.person-popover > contents {
+  padding: 4px;
+}

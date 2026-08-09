@@ -13,11 +13,32 @@ class Photo(GObject.Object):
 
 
 class Album(GObject.Object):
-    """A folder of photos, or a user-created collection."""
+    """A folder of photos, or a user-created collection.
+
+    When `folder` is True the card represents a directory in the folder tree
+    (navigating into it drills down through sub-folders); otherwise it's a
+    user-created album. Folder nodes carry their directory in `path`."""
     __gtype_name__ = "Album"
     id = GObject.Property(type=int, default=0)
     title = GObject.Property(type=str, default="")
     path = GObject.Property(type=str, default="")
+    photo_count = GObject.Property(type=int, default=0)
+    cover_path = GObject.Property(type=str, default="")
+    date_taken = GObject.Property(type=float, default=0.0)
+    folder = GObject.Property(type=bool, default=False)
+    subfolder_count = GObject.Property(type=int, default=0)
+    # "" for a normal album/folder, or "favourites" / "hidden" for the pinned
+    # special albums shown in the Albums tab.
+    special = GObject.Property(type=str, default="")
+
+
+class Person(GObject.Object):
+    """Someone the user has tagged into photos by hand (Easel does no face
+    recognition). Shown as a card in the People view; opening it lists every
+    photo they're tagged in."""
+    __gtype_name__ = "Person"
+    id = GObject.Property(type=int, default=0)
+    name = GObject.Property(type=str, default="")
     photo_count = GObject.Property(type=int, default=0)
     cover_path = GObject.Property(type=str, default="")
     date_taken = GObject.Property(type=float, default=0.0)

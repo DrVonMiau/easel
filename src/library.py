@@ -5,6 +5,7 @@ folder it was scanned from) and can be added to any number of user-created
 albums on top of that — so album membership is many-to-many (album_photos).
 The folder-watching and pruning shape carries over from Lyre's music library.
 """
+import ctypes
 import os
 import struct
 import sqlite3
@@ -25,7 +26,9 @@ CREATE TABLE IF NOT EXISTS albums(
 CREATE TABLE IF NOT EXISTS photos(
   id INTEGER PRIMARY KEY, path TEXT UNIQUE,
   mtime REAL, date_taken REAL, favorite INTEGER DEFAULT 0,
-  rotation INTEGER DEFAULT 0);
+  rotation INTEGER DEFAULT 0,
+  lat REAL, lon REAL,
+  hidden INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS album_photos(
   album_id INTEGER NOT NULL, photo_id INTEGER NOT NULL,
   UNIQUE(album_id, photo_id),
@@ -33,6 +36,21 @@ CREATE TABLE IF NOT EXISTS album_photos(
   FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_ap_album ON album_photos(album_id);
 CREATE INDEX IF NOT EXISTS idx_ap_photo ON album_photos(photo_id);
+
+-- People: manual, hand-made tags (a name pinned onto a photo). No face
+-- recognition — every row here was placed by the user. A person can appear at
+-- most once per photo; the pin's normalised (x, y) records where the user
+-- pointed so it can be shown back on the image.
+CREATE TABLE IF NOT EXISTS persons(id INTEGER PRIMARY KEY, name TEXT UNIQUE);
+CREATE TABLE IF NOT EXISTS faces(
+  id INTEGER PRIMARY KEY,
+  photo_id INTEGER NOT NULL, person_id INTEGER NOT NULL,
+  x REAL, y REAL,
+  UNIQUE(photo_id, person_id),
+  FOREIGN KEY(photo_id) REFERENCES photos(id) ON DELETE CASCADE,
+  FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 """
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif",
@@ -56,6 +74,22 @@ def connect():
     # Migration for libraries created before non-destructive rotation.
     try:
         con.execute("ALTER TABLE photos ADD COLUMN rotation INTEGER DEFAULT 0")
+        con.commit()
+    except sqlite3.OperationalError:
+        pass
+    # Migration for libraries created before the Map view (GPS columns). NULL
+    # lat/lon means "not read yet"; backfill_locations fills them in lazily.
+    for col in ("lat", "lon"):
+        try:
+            con.execute(f"ALTER TABLE photos ADD COLUMN {col} REAL")
+            con.commit()
+        except sqlite3.OperationalError:
+            pass
+    # Migration for libraries created before Hide. A hidden photo is tucked out
+    # of every view but stays on disk and in the index, so it can be un-hidden;
+    # nothing about the file changes.
+    try:
+        con.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
         con.commit()
     except sqlite3.OperationalError:
         pass
@@ -230,6 +264,137 @@ def _exif_datetime(path):
     return None
 
 
+def _find_exif_tiff(path):
+    """Locate a JPEG's EXIF block and return (tiff_bytes, byte_order) where
+    tiff_bytes starts at the TIFF header (right after 'Exif\\x00\\x00') and
+    byte_order is '<' or '>'. Returns (None, None) if there's no readable EXIF.
+    Shared by the GPS reader; the older date reader keeps its own inline walk."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(256 * 1024)
+    except OSError:
+        return None, None
+    if head[:2] != b"\xff\xd8":  # not a JPEG
+        return None, None
+    i = 2
+    exif = None
+    while i + 4 <= len(head):
+        if head[i] != 0xFF:
+            break
+        marker = head[i + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", head[i + 2:i + 4])[0]
+        seg = head[i + 4:i + 2 + seg_len]
+        if marker == 0xE1 and seg[:6] == b"Exif\x00\x00":
+            exif = seg[6:]
+            break
+        if marker == 0xDA:  # start of scan — no metadata past here
+            break
+        i += 2 + seg_len
+    if not exif or len(exif) < 8:
+        return None, None
+    bo = "<" if exif[:2] == b"II" else ">" if exif[:2] == b"MM" else None
+    if bo is None:
+        return None, None
+    return exif, bo
+
+
+def _gps_rationals(exif, bo, off, count):
+    """Read `count` EXIF RATIONALs (each two u32: numerator/denominator) starting
+    at `off`, as a list of floats. Returns None on any malformed entry."""
+    out = []
+    for k in range(count):
+        base = off + k * 8
+        if base + 8 > len(exif):
+            return None
+        num = struct.unpack(bo + "I", exif[base:base + 4])[0]
+        den = struct.unpack(bo + "I", exif[base + 4:base + 8])[0]
+        out.append(num / den if den else 0.0)
+    return out
+
+
+def _exif_gps(path):
+    """The photo's capture location as (lat, lon) in signed decimal degrees, or
+    None if the file carries no readable GPS EXIF. Self-contained, like the date
+    reader — no gdk-pixbuf/glycin and no extra dependency.
+
+    Walks IFD0 to the GPS sub-IFD (tag 0x8825) and reads GPSLatitude/Longitude
+    (three RATIONALs: degrees, minutes, seconds) with their N/S and E/W refs."""
+    exif, bo = _find_exif_tiff(path)
+    if exif is None:
+        return None
+
+    def u16(o):
+        return struct.unpack(bo + "H", exif[o:o + 2])[0]
+
+    def u32(o):
+        return struct.unpack(bo + "I", exif[o:o + 4])[0]
+
+    try:
+        ifd0 = u32(4)
+        if ifd0 <= 0 or ifd0 + 2 > len(exif):
+            return None
+        # Find the GPS Info IFD pointer (tag 0x8825, LONG) inside IFD0.
+        gps_off = None
+        count = u16(ifd0)
+        entry = ifd0 + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            if u16(entry) == 0x8825:
+                gps_off = u32(entry + 8)
+                break
+            entry += 12
+        if not gps_off or gps_off + 2 > len(exif):
+            return None
+        # Read the GPS IFD: refs (ASCII) and lat/lon (three RATIONALs each).
+        lat = lon = None
+        lat_ref = lon_ref = None
+        count = u16(gps_off)
+        entry = gps_off + 2
+        for _ in range(count):
+            if entry + 12 > len(exif):
+                break
+            tag = u16(entry)
+            typ = u16(entry + 2)
+            n = u32(entry + 4)
+            val_off = entry + 8
+            if tag == 1 and typ == 2:            # GPSLatitudeRef (N/S)
+                lat_ref = exif[val_off:val_off + 1].decode("ascii", "ignore")
+            elif tag == 3 and typ == 2:          # GPSLongitudeRef (E/W)
+                lon_ref = exif[val_off:val_off + 1].decode("ascii", "ignore")
+            elif tag == 2 and typ == 5 and n >= 2:   # GPSLatitude
+                lat = _gps_rationals(exif, bo, u32(val_off), min(n, 3))
+            elif tag == 4 and typ == 5 and n >= 2:   # GPSLongitude
+                lon = _gps_rationals(exif, bo, u32(val_off), min(n, 3))
+            entry += 12
+        if not lat or not lon:
+            return None
+    except (struct.error, IndexError, ValueError):
+        return None
+
+    def to_deg(parts):
+        d = parts[0] if len(parts) > 0 else 0.0
+        m = parts[1] if len(parts) > 1 else 0.0
+        s = parts[2] if len(parts) > 2 else 0.0
+        return d + m / 60.0 + s / 3600.0
+
+    latitude = to_deg(lat)
+    longitude = to_deg(lon)
+    if (lat_ref or "").upper() == "S":
+        latitude = -latitude
+    if (lon_ref or "").upper() == "W":
+        longitude = -longitude
+    # Reject obviously bogus fixes (some cameras write 0,0 or out-of-range).
+    if not (-90.0 <= latitude <= 90.0) or not (-180.0 <= longitude <= 180.0):
+        return None
+    if abs(latitude) < 1e-6 and abs(longitude) < 1e-6:
+        return None
+    return round(latitude, 6), round(longitude, 6)
+
+
 def read_exif_segment(path):
     """Return the raw APP1 payload (starting b'Exif\\x00\\x00') of a JPEG, ready
     to be spliced into another JPEG, or None if there's none to copy.
@@ -342,14 +507,69 @@ def write_png_with_exif(png_path, exif_tiff):
             pass
 
 
+# --- creation (birth) time -------------------------------------------------
+# Python's os.stat only exposes st_birthtime on macOS/BSD/Windows, never on
+# Linux — where we instead call the statx(2) syscall for STATX_BTIME. The statx
+# struct has a fixed, architecture-independent layout, so this ctypes mirror is
+# portable across Linux arches. Any failure falls back to None (→ mtime).
+_AT_FDCWD = -100
+_STATX_BTIME = 0x00000800
+
+
+class _StatxTimestamp(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_int64), ("tv_nsec", ctypes.c_uint32),
+                ("__reserved", ctypes.c_int32)]
+
+
+class _Statx(ctypes.Structure):
+    _fields_ = [
+        ("stx_mask", ctypes.c_uint32), ("stx_blksize", ctypes.c_uint32),
+        ("stx_attributes", ctypes.c_uint64),
+        ("stx_nlink", ctypes.c_uint32), ("stx_uid", ctypes.c_uint32),
+        ("stx_gid", ctypes.c_uint32), ("stx_mode", ctypes.c_uint16),
+        ("__spare0", ctypes.c_uint16),
+        ("stx_ino", ctypes.c_uint64), ("stx_size", ctypes.c_uint64),
+        ("stx_blocks", ctypes.c_uint64), ("stx_attributes_mask", ctypes.c_uint64),
+        ("stx_atime", _StatxTimestamp), ("stx_btime", _StatxTimestamp),
+        ("stx_ctime", _StatxTimestamp), ("stx_mtime", _StatxTimestamp),
+        ("stx_rdev_major", ctypes.c_uint32), ("stx_rdev_minor", ctypes.c_uint32),
+        ("stx_dev_major", ctypes.c_uint32), ("stx_dev_minor", ctypes.c_uint32),
+        ("stx_mnt_id", ctypes.c_uint64), ("__spare2", ctypes.c_uint64),
+        ("__spare3", ctypes.c_uint64 * 12),
+    ]
+
+
+_libc = None
+_statx_ok = True
+
+
+def _linux_btime(path):
+    global _libc, _statx_ok
+    if not _statx_ok:
+        return None
+    try:
+        if _libc is None:
+            _libc = ctypes.CDLL(None, use_errno=True)
+        buf = _Statx()
+        res = _libc.statx(_AT_FDCWD, os.fsencode(path), 0,
+                          _STATX_BTIME, ctypes.byref(buf))
+        if res == 0 and (buf.stx_mask & _STATX_BTIME) and buf.stx_btime.tv_sec > 0:
+            return float(buf.stx_btime.tv_sec)
+    except (OSError, AttributeError, ValueError):
+        _statx_ok = False  # no statx here; stop trying
+    return None
+
+
 def _file_created(path):
-    """Filesystem creation (birth) time if the platform exposes it, else None."""
+    """Filesystem creation (birth) time, or None if unavailable."""
     try:
         st = os.stat(path)
     except OSError:
         return None
-    bt = getattr(st, "st_birthtime", None)
-    return bt if bt else None
+    bt = getattr(st, "st_birthtime", None)  # macOS / BSD / Windows
+    if bt:
+        return bt
+    return _linux_btime(path)
 
 
 def _date_taken(path):
@@ -389,9 +609,11 @@ def scan_file(con, path):
                 con.execute("UPDATE photos SET date_taken=? WHERE id=?",
                             (fresh, photo_id))
     else:
+        gps = _exif_gps(path)
+        lat, lon = gps if gps else (None, None)
         photo_id = con.execute(
-            "INSERT INTO photos(path, mtime, date_taken) VALUES (?,?,?)",
-            (path, mtime, _date_taken(path)),
+            "INSERT INTO photos(path, mtime, date_taken, lat, lon) VALUES (?,?,?,?,?)",
+            (path, mtime, _date_taken(path), lat, lon),
         ).lastrowid
     con.execute(
         "INSERT OR IGNORE INTO album_photos(album_id, photo_id) VALUES (?,?)",
@@ -471,30 +693,139 @@ _FOLDER_TITLE = """(SELECT a.title FROM album_photos ap JOIN albums a ON a.id = 
    WHERE ap.photo_id = photos.id AND a.path IS NOT NULL LIMIT 1) AS album_title"""
 
 
-def all_photos(con):
+# Hidden photos stay in the index but are kept out of every view unless the
+# caller opts in (the "Show hidden photos" toggle). This one clause is spliced
+# into each photo-listing query so the rule lives in a single place.
+def _hidden_clause(include_hidden, prefix="AND"):
+    return "" if include_hidden else f" {prefix} photos.hidden=0"
+
+
+def all_photos(con, include_hidden=False):
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE 1{_hidden_clause(include_hidden)}
             ORDER BY photos.date_taken DESC, photos.path"""
     ).fetchall()
 
 
 def all_albums(con):
+    # Counts and the "latest" date reflect only visible (non-hidden) photos, so
+    # an album's tile matches what opening it shows.
     return con.execute(
         """SELECT albums.*,
-             (SELECT COUNT(*) FROM album_photos WHERE album_photos.album_id = albums.id) AS photo_count,
+             (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = albums.id AND p.hidden=0) AS photo_count,
              (SELECT MAX(p.date_taken) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-              WHERE ap.album_id = albums.id) AS date_taken
+              WHERE ap.album_id = albums.id AND p.hidden=0) AS date_taken
            FROM albums ORDER BY user_created DESC, albums.title"""
     ).fetchall()
 
 
-def photos_by_album(con, album_id):
+def photos_by_album(con, album_id, include_hidden=False):
     return con.execute(
         f"""SELECT photos.*, {_FOLDER_TITLE} FROM album_photos ap
             JOIN photos ON photos.id = ap.photo_id
-            WHERE ap.album_id=? ORDER BY photos.date_taken, photos.path""",
+            WHERE ap.album_id=?{_hidden_clause(include_hidden)}
+            ORDER BY photos.date_taken, photos.path""",
         (album_id,),
     ).fetchall()
+
+
+def folder_tree(con):
+    """Build the folder-native navigation tree from the watched roots and the
+    folder albums under them, mirroring the directory structure on disk.
+
+    Every folder album is a directory that holds photos directly; intermediate
+    directories (photos only deeper down) are synthesised so navigation is
+    unbroken. A folder scanned outside any watched root (e.g. a one-off) becomes
+    its own top-level node.
+
+    Returns (nodes, roots):
+      nodes: {path: {path, title, parent, album_id, direct, total, cover,
+                     children (sorted child paths)}}
+        direct = photos in this folder itself (hidden excluded);
+        total  = photos in this folder and everything under it;
+        cover  = a representative photo path (own, else first descendant's).
+      roots: sorted list of top-level node paths.
+    """
+    roots = [r["path"].rstrip("/") or r["path"]
+             for r in con.execute("SELECT path FROM folders").fetchall()]
+    albums = con.execute(
+        """SELECT a.id, a.path, a.cover_path,
+             (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+              WHERE ap.album_id = a.id AND p.hidden = 0) AS direct
+           FROM albums a WHERE a.path IS NOT NULL""").fetchall()
+
+    nodes = {}
+
+    def ensure(path):
+        node = nodes.get(path)
+        if node is None:
+            node = nodes[path] = {
+                "path": path, "title": os.path.basename(path) or path,
+                "parent": None, "album_id": None, "direct": 0, "total": 0,
+                "cover": None, "children": [],
+            }
+        return node
+
+    rootset = set(roots)
+    for r in roots:
+        ensure(r)
+
+    def owning_root(path):
+        best = None
+        for r in roots:
+            if path == r or path.startswith(r + os.sep):
+                if best is None or len(r) > len(best):
+                    best = r
+        return best
+
+    for row in albums:
+        p = row["path"].rstrip("/") or row["path"]
+        node = ensure(p)
+        node["album_id"] = row["id"]
+        node["direct"] = row["direct"] or 0
+        if row["cover_path"]:
+            node["cover"] = row["cover_path"]
+        root = owning_root(p)
+        if root is None:
+            rootset.add(p)  # scanned outside any watched root: its own top level
+            continue
+        # Link p up to its root, synthesising any missing intermediate dirs.
+        child = p
+        while child != root:
+            parent = os.path.dirname(child)
+            cn, pn = ensure(child), ensure(parent)
+            cn["parent"] = parent
+            if child not in pn["children"]:
+                pn["children"].append(child)
+            child = parent
+
+    # Post-order: sort children, sum totals, and let a coverless folder inherit
+    # a descendant's cover.
+    order, seen = [], set()
+
+    def visit(path):
+        if path in seen:
+            return
+        seen.add(path)
+        for c in nodes[path]["children"]:
+            visit(c)
+        order.append(path)
+
+    for r in rootset:
+        visit(r)
+    for path in order:
+        node = nodes[path]
+        node["children"].sort(key=lambda c: nodes[c]["title"].lower())
+        node["total"] = node["direct"] + sum(nodes[c]["total"] for c in node["children"])
+        if not node["cover"]:
+            for c in node["children"]:
+                if nodes[c]["cover"]:
+                    node["cover"] = nodes[c]["cover"]
+                    break
+
+    return nodes, sorted(rootset, key=lambda p: nodes[p]["title"].lower())
 
 
 def get_photo(con, photo_id):
@@ -520,11 +851,181 @@ def set_favorite(con, photo_id, favorite):
     con.commit()
 
 
+def set_photo_hidden(con, photo_id, hidden):
+    """Hide (or un-hide) a photo. Reversible and non-destructive: the file and
+    its index row are untouched; it just stops appearing in the views."""
+    con.execute("UPDATE photos SET hidden=? WHERE id=?", (1 if hidden else 0, photo_id))
+    con.commit()
+
+
+def is_hidden(con, photo_id):
+    row = con.execute("SELECT hidden FROM photos WHERE id=?", (photo_id,)).fetchone()
+    return bool(row and row["hidden"])
+
+
 def set_photo_date(con, photo_id, date_taken):
     """Correct a photo's capture date. Stored in the library; sorting and the
     Months/Days views follow it immediately. (Writing it back into the file's
     EXIF is a later addition.)"""
     con.execute("UPDATE photos SET date_taken=? WHERE id=?", (date_taken, photo_id))
+    con.commit()
+
+
+# ---------- locations (Map view) ----------
+
+def backfill_locations(con, progress_cb=None):
+    """Read GPS from any photo whose location hasn't been extracted yet (lat is
+    NULL — either never scanned for GPS, or migrated from an older library).
+    Returns the number of photos that gained a location. Safe to run in a worker
+    thread; commits in one batch at the end.
+
+    Photos with no GPS stay NULL, so a later call re-checks them — cheap unless
+    the library is huge, and the Map view only triggers this once per session."""
+    rows = con.execute(
+        "SELECT id, path FROM photos WHERE lat IS NULL").fetchall()
+    total = len(rows)
+    found = 0
+    for i, row in enumerate(rows):
+        gps = _exif_gps(row["path"])
+        if gps:
+            con.execute("UPDATE photos SET lat=?, lon=? WHERE id=?",
+                        (gps[0], gps[1], row["id"]))
+            found += 1
+        if progress_cb:
+            progress_cb(i + 1, total)
+    con.commit()
+    return found
+
+
+def hidden_photos(con):
+    """Every hidden photo, newest first — the contents of the Hidden album."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE photos.hidden=1
+            ORDER BY photos.date_taken DESC, photos.path"""
+    ).fetchall()
+
+
+def photos_with_location(con, include_hidden=False):
+    """Every geotagged photo, newest first — the data the Map view pins."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM photos
+            WHERE lat IS NOT NULL AND lon IS NOT NULL{_hidden_clause(include_hidden)}
+            ORDER BY photos.date_taken DESC, photos.path"""
+    ).fetchall()
+
+
+# ---------- people (manual tagging) ----------
+
+def get_or_create_person(con, name):
+    """The person id for a name, creating the person on first use. Names are
+    matched case-insensitively so 'Ada' and 'ada' are the same person, but the
+    first spelling the user typed is the one that's stored."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = con.execute(
+        "SELECT id FROM persons WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return con.execute("INSERT INTO persons(name) VALUES (?)", (name,)).lastrowid
+
+
+def tag_person(con, photo_id, name, x=0.5, y=0.5):
+    """Tag a person into a photo at a normalised (x, y) pin, creating the person
+    if new. Re-tagging the same person just moves their pin. Returns the
+    person id, or None if the name was blank."""
+    person_id = get_or_create_person(con, name)
+    if person_id is None:
+        return None
+    con.execute(
+        """INSERT INTO faces(photo_id, person_id, x, y) VALUES (?,?,?,?)
+           ON CONFLICT(photo_id, person_id) DO UPDATE SET x=excluded.x, y=excluded.y""",
+        (photo_id, person_id, x, y),
+    )
+    con.commit()
+    return person_id
+
+
+def remove_face(con, photo_id, person_id):
+    """Untag a person from a photo. The person themselves is kept even if this
+    was their last photo, so their name stays available for re-tagging."""
+    con.execute("DELETE FROM faces WHERE photo_id=? AND person_id=?",
+                (photo_id, person_id))
+    con.commit()
+
+
+def faces_for_photo(con, photo_id):
+    """The people tagged in a photo: rows of (person_id, name, x, y)."""
+    return con.execute(
+        """SELECT f.person_id, p.name, f.x, f.y FROM faces f
+           JOIN persons p ON p.id = f.person_id
+           WHERE f.photo_id=? ORDER BY p.name COLLATE NOCASE""",
+        (photo_id,),
+    ).fetchall()
+
+
+def all_persons(con):
+    """Everyone who's been tagged, with how many photos they're in and a cover
+    (their most recent photo). People with no photos left are dropped so the
+    People view never shows empty cards."""
+    return con.execute(
+        """SELECT p.id, p.name,
+             (SELECT COUNT(*) FROM faces WHERE faces.person_id = p.id) AS photo_count,
+             (SELECT ph.path FROM faces f JOIN photos ph ON ph.id = f.photo_id
+              WHERE f.person_id = p.id ORDER BY ph.date_taken DESC LIMIT 1) AS cover_path,
+             (SELECT MAX(ph.date_taken) FROM faces f JOIN photos ph ON ph.id = f.photo_id
+              WHERE f.person_id = p.id) AS date_taken
+           FROM persons p
+           WHERE EXISTS (SELECT 1 FROM faces WHERE faces.person_id = p.id)
+           ORDER BY p.name COLLATE NOCASE"""
+    ).fetchall()
+
+
+def get_person(con, person_id):
+    return con.execute("SELECT id, name FROM persons WHERE id=?",
+                       (person_id,)).fetchone()
+
+
+def people_by_photo(con):
+    """A dict photo_id -> list of tagged person names, for search."""
+    out = {}
+    for r in con.execute(
+            """SELECT f.photo_id AS pid, p.name AS name FROM faces f
+               JOIN persons p ON p.id = f.person_id"""):
+        out.setdefault(r["pid"], []).append(r["name"])
+    return out
+
+
+def photos_for_person(con, person_id, include_hidden=False):
+    """Every photo a person is tagged in, newest first."""
+    return con.execute(
+        f"""SELECT photos.*, {_FOLDER_TITLE} FROM faces f
+            JOIN photos ON photos.id = f.photo_id
+            WHERE f.person_id=?{_hidden_clause(include_hidden)}
+            ORDER BY photos.date_taken DESC, photos.path""",
+        (person_id,),
+    ).fetchall()
+
+
+def rename_person(con, person_id, name):
+    """Rename a person, unless the new name collides with someone else."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    clash = con.execute(
+        "SELECT id FROM persons WHERE name=? COLLATE NOCASE AND id<>?",
+        (name, person_id)).fetchone()
+    if clash:
+        return False
+    con.execute("UPDATE persons SET name=? WHERE id=?", (name, person_id))
+    con.commit()
+    return True
+
+
+def delete_person(con, person_id):
+    """Forget a person entirely; their tags are removed (ON DELETE CASCADE)."""
+    con.execute("DELETE FROM persons WHERE id=?", (person_id,))
     con.commit()
 
 

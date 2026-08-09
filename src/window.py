@@ -7,25 +7,27 @@ full-window lightbox (double click) — and the volume slider becomes a
 thumbnail-size slider.
 
 Tabs are two groups: the primary time views (All Photos / Months / Years) and a
-secondary group (Albums / Favourites / Maps / People). Months and Years show
+secondary group (Albums / Favourites / Map / People). Months and Years show
 bounded period cards that drill into a recycling grid, so a big library never
-loads a tile per photo. Maps and People are placeholders for now — they need
-EXIF GPS and face detection respectively.
+loads a tile per photo. Map pins each geotagged photo on an offline world map;
+People gathers photos by the names the user has tagged into them by hand.
 """
 import json
 import os
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango
 
 from . import library as lib
-from .models import Album, Period, Photo
-from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FilterThumb,
-                      Swatch, load_full_texture, render_adjusted_texture)
+from .models import Album, Person, Photo
+from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FacePinLayer,
+                      FilterThumb, MapView, Swatch, load_full_texture,
+                      render_adjusted_texture, suspend_video_thumbnails)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -36,13 +38,20 @@ PHOTO_ENTRIES = [
     ("Add to Favourites", "toggle-fav"),
     (None, None),
     ("Set as Album Cover", "set-cover"),
-    ("Delete Picture", "delete"),
+    ("Hide", "hide"),
+    ("Move to Trash…", "trash"),
 ]
 ALBUM_ENTRIES = [
     ("Open", "open"),
     ("Rename…", "rename-album"),
     (None, None),
     ("Delete album", "delete"),
+]
+PERSON_ENTRIES = [
+    ("Open", "open"),
+    ("Rename…", "rename-person"),
+    (None, None),
+    ("Remove Person", "delete"),
 ]
 
 THEME_SCHEMES = {
@@ -52,18 +61,12 @@ THEME_SCHEMES = {
 }
 
 # Primary (time) tabs then the secondary group; order matches the accelerators.
-# (Maps + People are deferred until GPS/face-detection land.)
-VIEW_NAMES = ("all_photos", "months", "years", "albums", "favourites")
+VIEW_NAMES = ("all_photos", "folders", "albums", "people", "map")
 
 SPACE_XS, SPACE_S, SPACE_M, SPACE_L, SPACE_XL = 4, 8, 16, 24, 32
 
 POINTER_CURSOR = Gdk.Cursor.new_from_name("pointer")
 
-SORT_OPTIONS = {
-    "photos": [("Newest", "date"), ("Name", "name")],
-    "albums": [("Name", "name"), ("Newest", "date"), ("Photos", "count")],
-}
-SORT_GROUP_FOR_TAB = {"all_photos": "photos", "favourites": "photos", "albums": "albums"}
 
 
 def _fmt_date(ts):
@@ -114,7 +117,6 @@ class EaselWindow(Adw.ApplicationWindow):
     root_box = Gtk.Template.Child()
     content_row = Gtk.Template.Child()
     search_toggle_btn = Gtk.Template.Child()
-    sort_btn = Gtk.Template.Child()
     nav_row = Gtk.Template.Child()
     titlebar_box = Gtk.Template.Child()
     titlebar_spacer = Gtk.Template.Child()
@@ -125,18 +127,20 @@ class EaselWindow(Adw.ApplicationWindow):
 
     middle_stack = Gtk.Template.Child()
     tab_all_photos = Gtk.Template.Child()
-    tab_months = Gtk.Template.Child()
-    tab_years = Gtk.Template.Child()
+    tab_folders = Gtk.Template.Child()
     tab_albums = Gtk.Template.Child()
-    tab_favourites = Gtk.Template.Child()
+    tab_map = Gtk.Template.Child()
+    tab_people = Gtk.Template.Child()
     search_entry = Gtk.Template.Child()
 
     paper_stack = Gtk.Template.Child()
     photo_grid = Gtk.Template.Child()
-    months_grid = Gtk.Template.Child()
-    years_grid = Gtk.Template.Child()
+    folders_grid = Gtk.Template.Child()
     album_grid = Gtk.Template.Child()
-    fav_grid = Gtk.Template.Child()
+    map_stack = Gtk.Template.Child()
+    map_slot = Gtk.Template.Child()
+    people_stack = Gtk.Template.Child()
+    people_grid = Gtk.Template.Child()
 
     detail_back_row = Gtk.Template.Child()
     back_btn = Gtk.Template.Child()
@@ -144,6 +148,7 @@ class EaselWindow(Adw.ApplicationWindow):
     detail_hero_slot = Gtk.Template.Child()
     detail_name_label = Gtk.Template.Child()
     detail_stats_label = Gtk.Template.Child()
+    detail_folders_grid = Gtk.Template.Child()
     detail_photos_grid = Gtk.Template.Child()
 
     info_revealer = Gtk.Template.Child()
@@ -193,21 +198,30 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self.view = "all_photos"
         self._last_tab = "all_photos"
-        # What the detail page is showing: ("album", id) or ("period", kind, key, title).
+        # What the detail page is showing: ("folder", path), ("album", id),
+        # ("person", id), ("favourites",) or ("hidden",).
         self._detail_source = None
         self._search_query = ""
         self._photos_all = []
         self._albums_all = []
+        self._user_albums = []
+        self._folder_cards = []    # root folder cards for the Folders tab
+        self._folder_nodes = {}    # path -> tree node (see lib.folder_tree)
+        self._folder_roots = []    # top-level folder paths
+        self._persons_all = []
+        self._photo_people = {}   # photo_id -> [names], for search
+        self._map_view = None
+        self._gps_backfilled = False
         self._visible_photos = []
-        self._visible_favs = []
         self._detail_photos = []
         self._surface_width = 0
         self._surface_height = 0
+        self._photo_cell = 0    # square tile size, set from real grid width
+        self._card_cell = 0     # square cover size for month/year/album cards
         self._thumb_size = self.settings.get_int("thumb-size")
         self._info_photo_id = None
         self._info_preview = None
         self._selected_tile = None
-        self._single_click_source = 0
 
         self._lightbox_photos = []
         self._lightbox_index = 0
@@ -219,20 +233,19 @@ class EaselWindow(Adw.ApplicationWindow):
         self._crop_backup = None
         self._applied_crop = None
 
-        self._sort = {group: self.settings.get_string(f"sort-{group}")
-                      for group in SORT_OPTIONS}
 
         self._tab_buttons = {
             "all_photos": self.tab_all_photos,
-            "months": self.tab_months,
-            "years": self.tab_years,
+            "folders": self.tab_folders,
             "albums": self.tab_albums,
-            "favourites": self.tab_favourites,
+            "map": self.tab_map,
+            "people": self.tab_people,
         }
 
         self._setup_actions()
         self._setup_window_controls()
         self._setup_lists()
+        self._setup_map()
         self._setup_info_panel()
         self._setup_lightbox()
         self._setup_editor()
@@ -362,9 +375,147 @@ class EaselWindow(Adw.ApplicationWindow):
         # Photo grids rebind from their stores (bind reads the current thumb
         # size). Month/Year period cards are a fixed size, so they don't change;
         # only the drill-down detail grid needs re-rendering.
+        self._size_all_grids()
         self._apply_filters()
         if self.view == "detail":
             self._render_detail()
+
+    # The thumbnail slider chooses how many photos sit across the grid rather
+    # than a fixed pixel size: tiles fill their column, so at the largest end
+    # one photo is ~a third of the paper, and at the smallest end many fit.
+    _MIN_COLS, _MAX_COLS = 3, 12
+
+    def _columns_for_thumb(self):
+        lo, hi = 110, 320  # matches the slider / thumb-size range
+        t = max(0.0, min(1.0, (self._thumb_size - lo) / float(hi - lo)))
+        # Bigger slider -> fewer, larger columns; max slider -> 3 (≈33% each).
+        return round(self._MAX_COLS - t * (self._MAX_COLS - self._MIN_COLS))
+
+    # ---- grid layout, defined once and driven by each grid's real width ----
+    #
+    # Every view lays photos/cards on the same grid; only the content differs.
+    # GtkGridView's own column heuristic (min/max columns + child natural size)
+    # proved unreliable for "square cells that fill the column" — it left tall
+    # rectangles or row gaps in some views but not others, because it doesn't
+    # dependably re-measure a cell's height for the width it finally allocates.
+    #
+    # So we don't rely on it. We read each grid's *actual* allocated width, pick
+    # an exact column count, force min-columns == max-columns to that count, and
+    # size every swatch to the resulting column width. Cells are then square by
+    # construction, identically in every view. Because fill-mode swatches may
+    # shrink to width 0 (see Swatch.set_fill) and the scrollers never scroll
+    # horizontally, forcing min == max can't push the grid wider — no layout
+    # loop. Sizing re-runs whenever a grid's width changes (its scroller's
+    # hadjustment "changed" fires on allocation) and when the slider or info
+    # panel changes the geometry.
+    PHOTO_GRIDS = ("photo_grid", "detail_photos_grid")
+    CARD_GRIDS = ("folders_grid", "album_grid", "people_grid")
+    GRID_MARGIN = SPACE_L   # 24px page margin around every grid (set in .ui)
+    THUMB_GAP = 1           # px gap between adjacent photo thumbnails
+    CARD_MARGIN = 8         # card box margin (each side) around its cover
+    CARD_TARGET = 200       # ideal card width before adding another column
+    CARD_MAX_COLS = 8
+
+    def _photo_grids(self):
+        return (self.photo_grid, self.detail_photos_grid)
+
+    def _card_grids(self):
+        return (self.folders_grid, self.album_grid, self.detail_folders_grid,
+                self.people_grid)
+
+    def _cell_px(self):
+        """Best current square size for a photo tile — the last value computed
+        from a real grid width, or an estimate before any grid is realised.
+        Used by _make_tile / _bind_tile so freshly recycled tiles start at the
+        right size (then _size_grid keeps them exact)."""
+        if self._photo_cell:
+            return self._photo_cell
+        return self._estimate_cell(self._columns_for_thumb(), self.THUMB_GAP)
+
+    def _card_cell_px(self):
+        if self._card_cell:
+            return self._card_cell
+        return self._estimate_cell(4, 2 * self.CARD_MARGIN)
+
+    def _estimate_paper_width(self):
+        # The paper-stack width derived from the surface the same way
+        # _apply_layout_metrics lays it out — the fallback before the real
+        # paper_stack has been allocated (first paint).
+        w = self._surface_width or 1180
+        margin_x = max(SPACE_L, round(w * 0.05))
+        paper = w - 2 * margin_x
+        if self.info_revealer.get_reveal_child():
+            paper -= round(w * 0.04) + self.PANEL_WIDTH
+        return max(240 + 2 * self.GRID_MARGIN, paper)
+
+    def _estimate_cell(self, n, gap):
+        content = self._estimate_paper_width() - 2 * self.GRID_MARGIN
+        return max(120, (content // max(1, n)) - gap)
+
+    def _setup_grid_sizing(self):
+        # An EaselGridView reports its allocation as a re-size trigger, but the
+        # width itself always comes from the shared paper stack, so every grid
+        # in every view/folder is sized identically (see _grid_content_width).
+        for grid in self._photo_grids() + self._card_grids():
+            grid.set_width_cb(self._size_grid)
+
+    def _grid_content_width(self):
+        """The width available to a grid's cells — identical for every grid,
+        because they're all pages of the same paper stack. Using this one stable
+        source (instead of each grid's own, unreliably-timed allocation) is what
+        makes every view and every folder lay out the same. The 2x GRID_MARGIN
+        is the 24px margin each grid carries in the .ui."""
+        w = self.paper_stack.get_width()
+        if w <= 1:
+            w = self._estimate_paper_width()
+        return max(1, w - 2 * self.GRID_MARGIN)
+
+    def _size_grid(self, grid, width=None):
+        """Force exact columns and square swatches for one grid. The width comes
+        from the shared paper stack (see _grid_content_width), never the grid's
+        own allocation, so all grids stay consistent."""
+        w = self._grid_content_width()
+        if grid in self._photo_grids():
+            n = max(1, min(self._MAX_COLS, self._columns_for_thumb()))
+            # A tile's swatch fills the column minus its trailing gap, so its
+            # fixed height must equal that width to stay square.
+            cell = max(1, (w // n) - self.THUMB_GAP)
+            self._photo_cell = cell
+        else:
+            n = max(2, min(self.CARD_MAX_COLS, w // self.CARD_TARGET))
+            # A card's cover fills the column minus the card's side margins.
+            cell = max(1, (w // n) - 2 * self.CARD_MARGIN)
+            self._card_cell = cell
+        # Applied on idle: this can run from within the grid's size-allocate, so
+        # changing columns / child sizes inline would re-enter layout.
+        GLib.idle_add(self._apply_grid_size, grid, n, cell)
+
+    def _apply_grid_size(self, grid, n, cell):
+        if grid.get_min_columns() != n or grid.get_max_columns() != n:
+            grid.set_min_columns(n)
+            grid.set_max_columns(n)
+        self._resize_swatches(grid, cell)
+        return False
+
+    @staticmethod
+    def _resize_swatches(root, cell):
+        stack = [root]
+        while stack:
+            widget = stack.pop()
+            swatch = getattr(widget, "swatch", None)
+            if isinstance(swatch, Swatch):
+                swatch.set_size(cell)  # no-op if unchanged
+            child = widget.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+
+    def _size_all_grids(self):
+        for grid in self._photo_grids() + self._card_grids():
+            self._size_grid(grid)
+
+    def _schedule_resize_tiles(self):
+        GLib.idle_add(self._size_all_grids)
 
     def _on_realize(self, *_args):
         surface = self.get_surface()
@@ -377,6 +528,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._surface_width = surface.get_width()
         self._surface_height = surface.get_height()
         self._apply_layout_metrics()
+        self._schedule_resize_tiles()
         return False
 
     def _apply_layout_metrics(self):
@@ -413,7 +565,6 @@ class EaselWindow(Adw.ApplicationWindow):
     def _setup_actions(self):
         for name, handler in (
             ("add-folder", lambda *_a: self._on_add_folder()),
-            ("add-photos", lambda *_a: self._on_add_photos()),
             ("rescan", lambda *_a: self._on_rescan()),
             ("new-album", lambda *_a: self._on_new_album()),
             ("preferences", lambda *_a: self._on_preferences()),
@@ -444,15 +595,11 @@ class EaselWindow(Adw.ApplicationWindow):
         key_ctl.connect("key-pressed", self._on_key_pressed)
         self.add_controller(key_ctl)
 
-        sort_mode = Gio.SimpleAction.new_stateful(
-            "sort-mode", GLib.VariantType.new("s"), GLib.Variant("s", self._sort["photos"]))
-        sort_mode.connect("activate", self._on_sort_mode)
-        self.add_action(sort_mode)
-
         item_actions = Gio.SimpleActionGroup()
         for name in ("open", "edit-image", "edit-info", "add-to-album",
                      "add-to-new-album", "set-cover", "toggle-fav",
-                     "rename-album", "delete"):
+                     "hide", "trash",
+                     "rename-album", "rename-person", "delete"):
             act = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             act.connect("activate", self._on_item_action)
             item_actions.add_action(act)
@@ -465,38 +612,51 @@ class EaselWindow(Adw.ApplicationWindow):
         self.photo_grid.set_model(Gtk.NoSelection(model=self.photo_store))
         self.photo_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "photos")))
 
+        # Folders tab: the watched roots as folder cards (drill in for photos).
+        self.folders_store = Gio.ListStore(item_type=Album)
+        self.folders_grid.set_model(Gtk.SingleSelection(model=self.folders_store))
+        self.folders_grid.set_factory(self._factory(self._bind_album_card))
+        self.folders_grid.set_single_click_activate(True)
+        self.folders_grid.connect(
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
+
+        # Albums tab: user-created albums plus the pinned Favourites / Hidden.
         self.album_store = Gio.ListStore(item_type=Album)
         self.album_grid.set_model(Gtk.SingleSelection(model=self.album_store))
         self.album_grid.set_factory(self._factory(self._bind_album_card))
         self.album_grid.set_single_click_activate(True)
         self.album_grid.connect(
-            "activate", lambda g, p: self._open_album(g.get_model().get_item(p).id))
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
 
-        self.fav_store = Gio.ListStore(item_type=Photo)
-        self.fav_grid.set_model(Gtk.NoSelection(model=self.fav_store))
-        self.fav_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "favourites")))
+        # Sub-folders shown at the top of a folder's detail page (the tree view).
+        self.detail_folders_store = Gio.ListStore(item_type=Album)
+        self.detail_folders_grid.set_model(
+            Gtk.SingleSelection(model=self.detail_folders_store))
+        self.detail_folders_grid.set_factory(self._factory(self._bind_album_card))
+        self.detail_folders_grid.set_single_click_activate(True)
+        self.detail_folders_grid.connect(
+            "activate", lambda g, p: self._activate_album_item(g.get_model().get_item(p)))
 
         self.detail_store = Gio.ListStore(item_type=Photo)
         self.detail_photos_grid.set_model(Gtk.NoSelection(model=self.detail_store))
         self.detail_photos_grid.set_factory(self._factory(lambda it: self._bind_tile_item(it, "detail")))
 
-        # Months / Years show bounded period cards, not a tile per photo.
-        self.months_store = Gio.ListStore(item_type=Period)
-        self.months_grid.set_model(Gtk.SingleSelection(model=self.months_store))
-        self.months_grid.set_factory(self._factory(self._bind_period_card))
-        self.months_grid.set_single_click_activate(True)
-        self.months_grid.connect("activate", self._on_period_activated)
+        self.people_store = Gio.ListStore(item_type=Person)
+        self.people_grid.set_model(Gtk.SingleSelection(model=self.people_store))
+        self.people_grid.set_factory(self._factory(self._bind_person_card))
+        self.people_grid.set_single_click_activate(True)
+        self.people_grid.connect(
+            "activate", lambda g, p: self._open_person(g.get_model().get_item(p).id))
 
-        self.years_store = Gio.ListStore(item_type=Period)
-        self.years_grid.set_model(Gtk.SingleSelection(model=self.years_store))
-        self.years_grid.set_factory(self._factory(self._bind_period_card))
-        self.years_grid.set_single_click_activate(True)
-        self.years_grid.connect("activate", self._on_period_activated)
+        self._setup_grid_sizing()
 
-    def _on_period_activated(self, gridview, position):
-        period = gridview.get_model().get_item(position)
-        if period is not None:
-            self._open_period(period.kind, period.key, period.title)
+    def _setup_map(self):
+        # Easel's map is the built-in offline vector map: no tiles, no network,
+        # no image decoding (all of which are unreliable in the sandbox). It's
+        # the only map, so there's nothing to configure here.
+        self._map_view = MapView()
+        self._map_view.set_activate_cb(self._on_map_pin)
+        self.map_slot.append(self._map_view)
 
     def _factory(self, bind_fn):
         factory = Gtk.SignalListItemFactory()
@@ -505,7 +665,7 @@ class EaselWindow(Adw.ApplicationWindow):
         return factory
 
     def _source_for(self, name):
-        return {"photos": self._visible_photos, "favourites": self._visible_favs,
+        return {"photos": self._visible_photos,
                 "detail": self._detail_photos}.get(name, self._visible_photos)
 
     def _bind_tile_item(self, item, source_name):
@@ -517,14 +677,22 @@ class EaselWindow(Adw.ApplicationWindow):
         self._bind_tile(tile, photo, source_name)
 
     def _make_tile(self):
+        # 1px margins → a 2px gap between neighbouring tiles.
+        # A 1px trailing margin on the right/bottom is the only gap between
+        # thumbnails, so neighbours sit 1px apart (the grid's own margin bounds
+        # the outer edges).
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                      margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+                      margin_end=self.THUMB_GAP, margin_bottom=self.THUMB_GAP)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
 
         overlay = Gtk.Overlay()
-        swatch = Swatch("", size=self._thumb_size)
-        swatch.add_css_class("card-swatch")
+        # Fills its grid cell (width from the column, height pinned to the same
+        # size) so tiles are squares that every row shares — sharp-cornered,
+        # cover-cropped 1:1.
+        swatch = Swatch("", size=self._cell_px())
+        swatch.add_css_class("photo-tile")
+        swatch.set_fill(True)
         overlay.set_child(swatch)
 
         # Single favourite control at the bottom-right: shown on hover or when
@@ -604,8 +772,7 @@ class EaselWindow(Adw.ApplicationWindow):
         tile._menu_item_id = photo.id
         tile._menu_entries = PHOTO_ENTRIES
         tile._menu_extra = {}
-        tile.swatch.set_size(self._thumb_size)
-        tile.set_size_request(self._thumb_size + 12, -1)
+        tile.swatch.set_size(self._cell_px())
         tile.swatch.set_placeholder("video" if photo.is_video else "")
         tile.swatch.set_path(photo.path or None, rotation=photo.rotation)
         tile.play.set_visible(photo.is_video)
@@ -638,31 +805,19 @@ class EaselWindow(Adw.ApplicationWindow):
                     return
                 picked = picked.get_parent()
         if n_press >= 2:
-            if self._single_click_source:
-                GLib.source_remove(self._single_click_source)
-                self._single_click_source = 0
             source = self._source_for(tile._source)
             ids = [p.id for p in source]
             index = ids.index(photo.id) if photo.id in ids else 0
             self._open_lightbox(source if source else [photo], index)
         elif n_press == 1:
-            if self._single_click_source:
-                GLib.source_remove(self._single_click_source)
-                self._single_click_source = 0
-            # Clicking the already-open photo again de-selects it and closes
-            # the panel (a toggle).
-            if (self._info_photo_id == photo.id
+            # Open the info panel immediately (no double-click debounce, which
+            # made the panel feel laggy). Clicking a photo — even the open one —
+            # keeps the panel open and re-selects it; closing is the close
+            # button's job. A double-click still opens the lightbox on top.
+            self._select_tile(tile)
+            if not (self._info_photo_id == photo.id
                     and self.info_revealer.get_reveal_child()):
-                self._close_info()
-                return
-            self._select_tile(tile)  # instant highlight; info opens after the tap window
-            pid = photo.id
-            self._single_click_source = GLib.timeout_add(230, lambda: self._single_fire(pid))
-
-    def _single_fire(self, photo_id):
-        self._single_click_source = 0
-        self._show_info(photo_id)
-        return False
+                self._show_info(photo.id)
 
     def _select_tile(self, tile):
         """Move the blue selection ring to `tile` (or clear it with None)."""
@@ -711,20 +866,34 @@ class EaselWindow(Adw.ApplicationWindow):
         if not hasattr(box, "swatch"):
             box = self._album_card_widget()
             item.set_child(box)
-        box.swatch.set_placeholder("album")
+        box.swatch.set_size(self._card_cell_px())
+        box.swatch.set_placeholder(album.special or "album")
         box.swatch.set_path(album.cover_path or None)
         box.title.set_label(album.title)
         count = album.photo_count
-        box.subtitle.set_label(f"{count} photo{'s' if count != 1 else ''}")
-        self._attach_album_menu(box, album.id)
+        parts = [f"{count} photo{'s' if count != 1 else ''}"]
+        if album.folder and album.subfolder_count:
+            n = album.subfolder_count
+            parts.append(f"{n} folder{'s' if n != 1 else ''}")
+        box.subtitle.set_label(" · ".join(parts))
+        if album.folder or album.special:
+            # A directory node, or a pinned special album: no rename/delete menu.
+            box._no_menu = True
+            box.menu_btn.set_visible(False)
+        else:
+            box._no_menu = False
+            self._attach_album_menu(box, album.id)
 
     def _album_card_widget(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=192,
+        # No fixed width: the card fills its grid column (see _size_grid) and the
+        # cover stays a 1:1 square at whatever width the column gives it.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
         box.set_cursor(POINTER_CURSOR)
         box.add_css_class("card-box")
-        swatch = Swatch("", size=192)
-        swatch.add_css_class("card-swatch")
+        swatch = Swatch("", size=self._card_cell_px())
+        swatch.add_css_class("card-cover")
+        swatch.set_fill(True)  # fill the card width and stay square (1:1)
 
         text_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         text_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
@@ -746,9 +915,11 @@ class EaselWindow(Adw.ApplicationWindow):
         box.append(text_row)
         box.swatch, box.title, box.subtitle, box.menu_btn = swatch, title, subtitle, menu_btn
         box._menu_open = False
+        box._no_menu = False   # folder-node cards set this to suppress the menu
 
         motion = Gtk.EventControllerMotion()
-        motion.connect("enter", lambda *_a: box.menu_btn.set_visible(True))
+        motion.connect("enter",
+                       lambda *_a: box.menu_btn.set_visible(not box._no_menu))
         motion.connect("leave",
                        lambda *_a: None if box._menu_open else box.menu_btn.set_visible(False))
         box.add_controller(motion)
@@ -766,6 +937,11 @@ class EaselWindow(Adw.ApplicationWindow):
             popover.connect("closed", on_closed)
 
         menu_btn.connect("clicked", on_menu_clicked)
+        # Right-click opens the same menu; folder-node cards (_no_menu) skip it.
+        gesture = Gtk.GestureClick(button=3)
+        gesture.connect("pressed", lambda _g, _n, x, y:
+                        None if box._no_menu else self._show_item_menu(box, box, x, y))
+        box.add_controller(gesture)
         return box
 
     def _attach_album_menu(self, box, album_id):
@@ -773,85 +949,6 @@ class EaselWindow(Adw.ApplicationWindow):
         box._menu_item_id = album_id
         box._menu_entries = ALBUM_ENTRIES
         box._menu_extra = {}
-        if getattr(box, "_album_menu_attached", False):
-            return
-        box._album_menu_attached = True
-        gesture = Gtk.GestureClick(button=3)
-        gesture.connect("pressed", lambda _g, _n, x, y: self._show_item_menu(box, box, x, y))
-        box.add_controller(gesture)
-
-    # ---------- period views (Months / Years) ----------
-
-    # (kind -> (key strftime, title strftime)). "Undated" catches bad/zero dates.
-    _PERIOD_FMT = {"month": ("%Y-%m", "%B %Y"), "year": ("%Y", "%Y")}
-
-    @staticmethod
-    def _period_of(date_taken, kind):
-        key_fmt, title_fmt = EaselWindow._PERIOD_FMT[kind]
-        try:
-            dt = datetime.fromtimestamp(date_taken)
-            return dt.strftime(key_fmt), dt.strftime(title_fmt)
-        except (ValueError, OSError):
-            return "undated", "Undated"
-
-    def _compute_periods(self, kind):
-        """Bucket the visible photos into month/year Periods, newest first, each
-        with its newest photo as the cover. Bounded to a handful (years) or a
-        few hundred (months) cards — never one per photo."""
-        order = []
-        buckets = {}
-        for p in sorted(self._visible_photos, key=lambda p: -p.date_taken):
-            key, title = self._period_of(p.date_taken, kind)
-            bucket = buckets.get(key)
-            if bucket is None:
-                bucket = buckets[key] = {"title": title, "count": 0, "cover": p.path}
-                order.append(key)
-            bucket["count"] += 1
-        periods = []
-        for key in order:
-            b = buckets[key]
-            n = b["count"]
-            periods.append(Period(kind=kind, key=key, title=b["title"],
-                                  subtitle=f"{n} photo{'s' if n != 1 else ''}",
-                                  cover_path=b["cover"] or ""))
-        return periods
-
-    def _render_months(self):
-        self._fill_period_store(self.months_store, self._compute_periods("month"))
-
-    def _render_years(self):
-        self._fill_period_store(self.years_store, self._compute_periods("year"))
-
-    def _fill_period_store(self, store, periods):
-        store.remove_all()
-        for period in periods:
-            store.append(period)
-
-    def _bind_period_card(self, item):
-        period = item.get_item()
-        box = item.get_child()
-        if not hasattr(box, "swatch"):
-            box = self._period_card_widget()
-            item.set_child(box)
-        box.swatch.set_placeholder(period.title)
-        box.swatch.set_path(period.cover_path or None)
-        box.title.set_label(period.title)
-        box.subtitle.set_label(period.subtitle)
-
-    def _period_card_widget(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=192,
-                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
-        box.set_cursor(POINTER_CURSOR)
-        box.add_css_class("card-box")
-        swatch = Swatch("", size=192)
-        swatch.add_css_class("card-swatch")
-        title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["card-title"])
-        subtitle = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, css_classes=["mono-dim-sm"])
-        box.append(swatch)
-        box.append(title)
-        box.append(subtitle)
-        box.swatch, box.title, box.subtitle = swatch, title, subtitle
-        return box
 
     # ---------- context menus ----------
 
@@ -871,7 +968,7 @@ class EaselWindow(Adw.ApplicationWindow):
                 continue
             if action == "__albums__":
                 sub = Gio.Menu()
-                for album in self._albums_all:
+                for album in self._user_albums:
                     mi = Gio.MenuItem.new(album.title, None)
                     mi.set_action_and_target_value("item.add-to-album", payload(album=album.id))
                     sub.append_item(mi)
@@ -884,6 +981,8 @@ class EaselWindow(Adw.ApplicationWindow):
                 row = lib.get_photo(self.con, widget._menu_item_id)
                 label = ("Remove from Favourites" if row and row["favorite"]
                          else "Add to Favourites")
+            if action == "hide":
+                label = "Unhide" if lib.is_hidden(self.con, widget._menu_item_id) else "Hide"
             mi = Gio.MenuItem.new(label, None)
             mi.set_action_and_target_value(f"item.{action}", payload())
             section.append_item(mi)
@@ -906,9 +1005,26 @@ class EaselWindow(Adw.ApplicationWindow):
         if name == "delete":
             self._confirm_delete(kind, item_id)
             return
+        if name == "hide":
+            self._toggle_hidden(item_id)
+            return
+        if name == "trash":
+            self._confirm_trash(item_id)
+            return
         if name == "open" and kind == "album":
             self._select_tab("albums")
             self._open_album(item_id)
+            return
+        if name == "open" and kind == "person":
+            self._select_tab("people")
+            self._open_person(item_id)
+            return
+        if name == "rename-person":
+            person = lib.get_person(self.con, item_id)
+            if person:
+                self._prompt_name(
+                    "Rename Person", person["name"],
+                    lambda text: self._do_rename_person(item_id, text))
             return
         if name == "edit-image":
             self._open_editor(item_id)
@@ -950,12 +1066,113 @@ class EaselWindow(Adw.ApplicationWindow):
                     lib.rename_album(self.con, item_id, text), self._reload_all()))
             return
 
+    def _do_rename_person(self, person_id, text):
+        if not lib.rename_person(self.con, person_id, text):
+            self._toast("Another person already has that name")
+            return
+        self._reload_all()
+
     def _toggle_fav(self, photo_id):
         row = lib.get_photo(self.con, photo_id)
         if not row:
             return
         lib.set_favorite(self.con, photo_id, not row["favorite"])
         self._reload_all()
+
+    def _toggle_hidden(self, photo_id):
+        """Hide a photo (reversible, file untouched) or un-hide it. Hiding puts
+        up an Undo toast so it's a safe, one-click-back action."""
+        now_hidden = not lib.is_hidden(self.con, photo_id)
+        lib.set_photo_hidden(self.con, photo_id, now_hidden)
+        if self._info_photo_id == photo_id and now_hidden:
+            self._close_info()
+        self._reload_all()
+        if now_hidden:
+            toast = Adw.Toast.new("Photo hidden")
+            toast.set_button_label("Undo")
+            toast.connect("button-clicked",
+                          lambda _t: (lib.set_photo_hidden(self.con, photo_id, False),
+                                      self._reload_all()))
+            self.toast_overlay.add_toast(toast)
+        else:
+            self._toast("Photo unhidden")
+
+    def _confirm_trash(self, photo_id):
+        """Move the file to the system Trash — the only action in Easel that
+        touches the file on disk, so it's clearly fenced behind a warning. The
+        Trash is recoverable from the file manager; we never permanently
+        delete."""
+        row = lib.get_photo(self.con, photo_id)
+        if not row:
+            return
+        name = os.path.basename(row["path"])
+        dialog = Adw.AlertDialog(
+            heading="Move to Trash?",
+            body=(f"“{name}” will be moved to your system Trash. This removes it "
+                  "from disk — you can restore it from Trash in your file manager. "
+                  "To simply tuck it out of Easel without touching the file, use "
+                  "Hide instead."))
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("trash", "Move to Trash")
+        dialog.set_response_appearance("trash", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.connect("response",
+                       lambda _d, r: self._do_trash(photo_id) if r == "trash" else None)
+        dialog.present(self)
+
+    def _do_trash(self, photo_id):
+        row = lib.get_photo(self.con, photo_id)
+        if not row:
+            return
+        ok, err = self._trash_file(row["path"])
+        if not ok:
+            self._toast(f"Couldn’t move to Trash: {err}")
+            return
+        if self._info_photo_id == photo_id:
+            self._close_info()
+        lib.delete_photo(self.con, photo_id)
+        self._reload_all()
+        self._toast("Moved to Trash")
+
+    def _trash_file(self, path):
+        """Move a file to the system Trash, returning (ok, error_message).
+
+        Easel only has read-only access to the photo folders (see the Flatpak
+        manifest), so it can't move the file itself. The Trash portal does it
+        for us: it runs outside the sandbox with the user's own permissions, so
+        a read-only fd is enough to identify the file it should trash. We fall
+        back to Gio's direct trash for when Easel runs unsandboxed (developer
+        builds), where the portal may be absent."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+        except OSError as err:
+            return False, err.strerror
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            fd_list = Gio.UnixFDList.new()
+            handle = fd_list.append(fd)  # dups the fd; we still own ours
+            reply, _out = bus.call_with_unix_fd_list_sync(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Trash",
+                "TrashFile",
+                GLib.Variant("(h)", (handle,)),
+                GLib.VariantType.new("(u)"),
+                Gio.DBusCallFlags.NONE, -1, fd_list, None)
+            # The portal returns 1 on success, 0 on failure.
+            if reply.unpack()[0] == 1:
+                return True, None
+            portal_err = "the Trash portal declined"
+        except GLib.Error as err:
+            portal_err = err.message
+        finally:
+            os.close(fd)
+        # No portal (unsandboxed dev run): try Gio's own trash.
+        try:
+            Gio.File.new_for_path(path).trash(None)
+            return True, None
+        except GLib.Error as err:
+            return False, f"{portal_err}; {err.message}"
 
     def _confirm_delete(self, kind, item_id):
         if kind == "album":
@@ -966,6 +1183,11 @@ class EaselWindow(Adw.ApplicationWindow):
                 heading = "Remove album?"
                 body = ("This removes the folder's photos from your library. "
                         "Files on disk are not touched.")
+        elif kind == "person":
+            person = lib.get_person(self.con, item_id)
+            heading = "Remove person?"
+            body = (f"This removes {person['name']} and all their tags. "
+                    "Your photos are not touched.") if person else "Remove this person?"
         else:
             heading = "Delete picture?"
             body = "This only removes it from your library. The file on disk is not touched."
@@ -977,11 +1199,12 @@ class EaselWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def _do_delete(self, kind, item_id):
-        {"photo": lib.delete_photo, "album": lib.delete_album}[kind](self.con, item_id)
+        {"photo": lib.delete_photo, "album": lib.delete_album,
+         "person": lib.delete_person}[kind](self.con, item_id)
         if kind == "photo" and self._info_photo_id == item_id:
             self._close_info()
-        if (self.view == "detail" and kind == "album"
-                and self._detail_source and self._detail_source[0] == "album"
+        if (self.view == "detail" and self._detail_source
+                and self._detail_source[0] == kind
                 and self._detail_source[1] == item_id):
             self._go_back()
         self._reload_all()
@@ -1056,7 +1279,14 @@ class EaselWindow(Adw.ApplicationWindow):
         # can't be stretched wide by a big image's natural size (the old bug).
         self._info_preview = Swatch("", size=self.PANEL_WIDTH)
         self._info_preview.add_css_class("info-preview")
-        self.info_preview_slot.set_child(self._info_preview)
+        # A pin overlay on top of the preview shows tagged people and turns a
+        # click on the photo into a place-a-name action.
+        self._face_layer = FacePinLayer()
+        self._face_layer.set_place_cb(self._on_face_place)
+        preview_overlay = Gtk.Overlay()
+        preview_overlay.set_child(self._info_preview)
+        preview_overlay.add_overlay(self._face_layer)
+        self.info_preview_slot.set_child(preview_overlay)
         self.info_close_btn.connect("clicked", lambda *_: self._close_info())
         self.info_fullscreen_btn.connect("clicked", lambda *_: self._info_fullscreen())
         self.info_rotate_left_btn.connect("clicked", lambda *_: self._rotate_info(-90))
@@ -1078,6 +1308,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_preview.set_path(row["path"], rotation=self._photo_rotation(row))
 
         self._clear_box(self.info_rows_box)
+        # People tagged in this photo, with their pins shown on the preview.
+        faces = lib.faces_for_photo(self.con, photo_id)
+        self._face_layer.set_faces([(f["name"], f["x"], f["y"]) for f in faces])
+        self.info_rows_box.append(self._people_section(photo_id, faces))
+        self.info_rows_box.append(self._info_divider())
         dims = _dimensions(row["path"])
         try:
             size = _fmt_size(os.path.getsize(row["path"]))
@@ -1096,29 +1331,133 @@ class EaselWindow(Adw.ApplicationWindow):
         self.info_rows_box.append(
             self._info_row("Path", path, on_click=lambda p=path: self._open_in_files(p)))
 
+        # Opening the panel narrows the grid, which reflows the columns and would
+        # otherwise make the photo you just clicked jump. Record where it sits
+        # now, then re-anchor it there once the grid has reflowed.
+        self._anchor_selection(photo_id)
+
         self.info_revealer.set_visible(True)
         self.info_revealer.set_reveal_child(True)
         self._apply_layout_metrics()
-        # Opening the panel narrows the grid, which reflows the columns and can
-        # push the photo you just clicked off-screen. Scroll it back into view so
-        # the selection is never "lost".
-        self._scroll_grid_to_photo(photo_id)
+        self._schedule_resize_tiles()
 
-    def _scroll_grid_to_photo(self, photo_id):
-        grid, source = {
+    def _grid_and_source(self):
+        return {
             "all_photos": (self.photo_grid, self._visible_photos),
-            "favourites": (self.fav_grid, self._visible_favs),
             "detail": (self.detail_photos_grid, self._detail_photos),
         }.get(self.view, (None, None))
-        if grid is None or not hasattr(grid, "scroll_to"):
+
+    def _find_tile(self, grid, photo_id):
+        """The realised tile widget bound to photo_id, or None. Walks only the
+        grid's live (virtualised) subtree, so it's cheap."""
+        stack = [grid]
+        while stack:
+            w = stack.pop()
+            p = getattr(w, "_photo", None)
+            if p is not None and p.id == photo_id:
+                return w
+            child = w.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+        return None
+
+    def _grid_geometry(self, grid, source):
+        """Infer the grid's layout from its realised tiles: (ncols, row_height,
+        y0) such that model index j sits at content-y = y0 + (j // ncols) *
+        row_height. Uses tile positions (content coordinates), so it needs no
+        knowledge of CSS margins/spacing. None if too few tiles are realised."""
+        index_of = {p.id: k for k, p in enumerate(source)}
+        samples = []  # (index, content_y)
+        stack = [grid]
+        while stack:
+            w = stack.pop()
+            p = getattr(w, "_photo", None)
+            if p is not None and p.id in index_of:
+                ok, pt = w.compute_point(grid, Graphene.Point().init(0, 0))
+                if ok:
+                    samples.append((index_of[p.id], round(pt.y)))
+            child = w.get_first_child()
+            while child:
+                stack.append(child)
+                child = child.get_next_sibling()
+        if len(samples) < 2:
+            return None
+        rows = sorted({y for _, y in samples})
+        gaps = [b - a for a, b in zip(rows, rows[1:]) if b - a > 1]
+        if not gaps:
+            return None  # only one row realised — can't tell the row pitch
+        row_h = min(gaps)
+        counts = {}
+        for _, y in samples:
+            counts[y] = counts.get(y, 0) + 1
+        ncols = max(counts.values())  # a full row reveals the column count
+        if ncols < 1:
+            return None
+        j, yj = samples[0]
+        y0 = yj - (j // ncols) * row_h
+        return ncols, row_h, y0
+
+    def _anchor_selection(self, photo_id):
+        """Remember the clicked photo's viewport offset, then re-anchor it to
+        that offset after the grid reflows. Triggered on the scroller's
+        'changed' signal (fires once the reflow updates the content height), so
+        the measurement is taken after the new column count is in effect."""
+        grid, _ = self._grid_and_source()
+        if grid is None:
             return
-        for i, p in enumerate(source):
-            if p.id == photo_id:
-                try:
-                    grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)
-                except Exception:
-                    pass
+        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
+        tile = self._find_tile(grid, photo_id)
+        if tile is None or scrolled is None:
+            return
+        ok, pt = tile.compute_point(grid, Graphene.Point().init(0, 0))
+        if not ok:
+            return
+        vadj = scrolled.get_vadjustment()
+        offset = pt.y - vadj.get_value()  # where in the viewport it sits now
+
+        state = {"done": False, "handler": 0, "timeout": 0}
+
+        def finish():
+            if state["done"]:
                 return
+            state["done"] = True
+            if state["handler"]:
+                vadj.disconnect(state["handler"])
+            if state["timeout"]:
+                GLib.source_remove(state["timeout"])
+
+        def on_changed(_adj):
+            finish()
+            self._reanchor_photo(photo_id, offset)
+
+        state["handler"] = vadj.connect("changed", on_changed)
+        # If the column count didn't actually change, 'changed' won't fire and
+        # nothing needs re-anchoring — just drop the handler after a moment.
+        state["timeout"] = GLib.timeout_add(200, lambda: (finish(), False)[1])
+
+    def _reanchor_photo(self, photo_id, offset):
+        grid, source = self._grid_and_source()
+        if grid is None:
+            return
+        scrolled = grid.get_ancestor(Gtk.ScrolledWindow)
+        if scrolled is None:
+            return
+        geom = self._grid_geometry(grid, source)
+        try:
+            i = next(k for k, p in enumerate(source) if p.id == photo_id)
+        except StopIteration:
+            return
+        vadj = scrolled.get_vadjustment()
+        if geom is None:
+            grid.scroll_to(i, Gtk.ListScrollFlags.NONE, None)  # at least keep it visible
+            return
+        ncols, row_h, y0 = geom
+        content_y = y0 + (i // ncols) * row_h
+        target = content_y - offset
+        target = max(vadj.get_lower(),
+                     min(target, vadj.get_upper() - vadj.get_page_size()))
+        vadj.set_value(target)
 
     def _info_row(self, key, value, on_click=None):
         # Figma info rows: mono key on the left, value pushed to the right.
@@ -1181,12 +1520,11 @@ class EaselWindow(Adw.ApplicationWindow):
         self._info_preview.set_path(row["path"], rotation=new)
         # Update just this photo's orientation in place — a full reload would
         # repopulate every grid and could disturb scroll/selection.
-        for lst in (self._photos_all, self._visible_photos, self._visible_favs,
-                    self._detail_photos):
+        for lst in (self._photos_all, self._visible_photos, self._detail_photos):
             for p in lst:
                 if p.id == pid:
                     p.rotation = new
-        for store in (self.photo_store, self.fav_store, self.detail_store):
+        for store in (self.photo_store, self.detail_store):
             for i in range(store.get_n_items()):
                 if store.get_item(i).id == pid:
                     item = store.get_item(i)
@@ -1205,12 +1543,139 @@ class EaselWindow(Adw.ApplicationWindow):
         popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
         popover.popup()
 
+    # ---------- people tagging (info panel) ----------
+
+    def _people_section(self, photo_id, faces):
+        """The 'In this photo' info row: 'In this photo' key on the left, the
+        tagged names as a comma-separated, right-aligned value. A name opens
+        that person's photos on click; right-click offers to remove the tag.
+        Clicking the photo above tags a new person at a pin."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.append(Gtk.Label(label="In this photo", xalign=0,
+                             valign=Gtk.Align.CENTER, css_classes=["info-key"]))
+        # Names pushed to the right (hexpand claims the space; halign END places
+        # them at the right edge like the other info values).
+        names = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4,
+                        hexpand=True, halign=Gtk.Align.END, valign=Gtk.Align.CENTER,
+                        css_classes=["people-value"])
+        if faces:
+            last = len(faces) - 1
+            for i, f in enumerate(faces):
+                text = f["name"] + ("," if i < last else "")
+                names.append(self._person_name_label(photo_id, f["person_id"], text))
+        else:
+            names.append(self._add_name_label(photo_id))
+        row.append(names)
+        return row
+
+    def _person_name_label(self, photo_id, person_id, text):
+        label = Gtk.Label(label=text, css_classes=["person-name"],
+                          ellipsize=Pango.EllipsizeMode.END)
+        label.set_cursor(POINTER_CURSOR)
+        left = Gtk.GestureClick(button=1)
+        left.connect("released", lambda *_a: self._open_person_nav(person_id))
+        label.add_controller(left)
+        right = Gtk.GestureClick(button=3)
+        right.connect("pressed", lambda _g, _n, x, y:
+                      self._person_remove_menu(label, photo_id, person_id, x, y))
+        label.add_controller(right)
+        return label
+
+    def _add_name_label(self, photo_id):
+        label = Gtk.Label(label="Add name", css_classes=["person-add"])
+        label.set_cursor(POINTER_CURSOR)
+        gesture = Gtk.GestureClick(button=1)
+        gesture.connect(
+            "released", lambda *_a: self._add_person_popover(photo_id, label, 0.5, 0.5))
+        label.add_controller(gesture)
+        return label
+
+    def _open_person_nav(self, person_id):
+        if lib.get_person(self.con, person_id):
+            self._select_tab("people")
+            self._open_person(person_id)
+
+    def _person_remove_menu(self, anchor, photo_id, person_id, x, y):
+        popover = Gtk.Popover(has_arrow=True, css_classes=["person-popover"])
+        popover.set_parent(anchor)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        btn = Gtk.Button(label="Remove from photo", css_classes=["flat", "menu-item"])
+        btn.set_cursor(POINTER_CURSOR)
+
+        def do_remove(*_a):
+            popover.popdown()
+            self._untag_person(photo_id, person_id)
+
+        btn.connect("clicked", do_remove)
+        popover.set_child(btn)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+        popover.popup()
+
+    def _untag_person(self, photo_id, person_id):
+        lib.remove_face(self.con, photo_id, person_id)
+        self._people_changed(photo_id)
+
+    def _on_face_place(self, nx, ny, px, py):
+        if self._info_photo_id is not None:
+            self._add_person_popover(self._info_photo_id, self._face_layer,
+                                     nx, ny, px, py)
+
+    def _add_person_popover(self, photo_id, anchor, x, y, px=None, py=None):
+        popover = Gtk.Popover(css_classes=["person-popover"])
+        popover.set_parent(anchor)
+        if px is not None:
+            popover.set_pointing_to(
+                Gdk.Rectangle(x=int(px), y=int(py), width=1, height=1))
+        entry = Gtk.Entry(placeholder_text="Name", activates_default=True)
+        entry.set_size_request(180, -1)
+        # Offer the names already in use so a person is re-tagged, not duplicated.
+        store = Gtk.ListStore(str)
+        for p in self._persons_all:
+            store.append([p.name])
+        completion = Gtk.EntryCompletion()
+        completion.set_model(store)
+        completion.set_text_column(0)
+        completion.set_inline_completion(True)
+        completion.set_popup_completion(True)
+        entry.set_completion(completion)
+
+        def commit(*_a):
+            name = entry.get_text().strip()
+            if name:
+                lib.tag_person(self.con, photo_id, name, x, y)
+                self._people_changed(photo_id)
+            popover.popdown()
+
+        entry.connect("activate", commit)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+        popover.set_child(entry)
+        popover.popup()
+        entry.grab_focus()
+
+    def _people_changed(self, photo_id):
+        """Refresh everything that reflects a tag change without a full reload:
+        the People data, an open person page, and the info panel's section."""
+        self._persons_all = [
+            Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
+                   cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
+            for r in lib.all_persons(self.con)
+        ]
+        self._photo_people = lib.people_by_photo(self.con)
+        if self.view == "people":
+            self._render_people()
+        elif (self.view == "detail" and self._detail_source
+              and self._detail_source[0] == "person"):
+            self._render_detail()
+        if self._info_photo_id == photo_id:
+            self._show_info(photo_id)
+
     def _close_info(self):
         self.info_revealer.set_reveal_child(False)
         self.info_revealer.set_visible(False)
         self._info_photo_id = None
         self._select_tile(None)
         self._apply_layout_metrics()
+        self._schedule_resize_tiles()
 
     def _info_fullscreen(self):
         if self._info_photo_id is not None:
@@ -1684,7 +2149,7 @@ class EaselWindow(Adw.ApplicationWindow):
         self._show_lightbox_photo()
 
     def _open_photo_by_id(self, photo_id):
-        for source in (self._visible_photos, self._visible_favs, self._detail_photos):
+        for source in (self._visible_photos, self._detail_photos):
             for i, p in enumerate(source):
                 if p.id == photo_id:
                     self._open_lightbox(source, i)
@@ -1701,6 +2166,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _stop_lightbox_video(self):
         """Stop and release any playing video so audio doesn't keep going after
         navigating or closing."""
+        suspend_video_thumbnails(False)  # let background frame-grabbing resume
         try:
             stream = self.lightbox_video.get_media_stream()
             if stream is not None:
@@ -1724,6 +2190,9 @@ class EaselWindow(Adw.ApplicationWindow):
             self.lightbox_picture.set_visible(False)
             self.lightbox_picture.set_paintable(None)
             self.lightbox_video.set_visible(True)
+            # Pause background video-thumbnail decoding so it doesn't steal CPU
+            # from playback (resumed when the video stops / lightbox closes).
+            suspend_video_thumbnails(True)
             try:
                 self.lightbox_video.set_file(Gio.File.new_for_path(photo.path))
             except Exception:
@@ -1828,8 +2297,9 @@ class EaselWindow(Adw.ApplicationWindow):
         for row in lib.all_folders(self.con):
             path = row["path"]
             folder_row = Adw.ActionRow(title=path, title_lines=1)
-            remove_btn = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                    tooltip_text="Remove folder from library", css_classes=["flat"])
+            remove_btn = Gtk.Button(icon_name="list-remove-symbolic", valign=Gtk.Align.CENTER,
+                                    tooltip_text="Disconnect this folder from Easel",
+                                    css_classes=["flat"])
             remove_btn.connect("clicked",
                                lambda _b, p=path, d=dialog: self._confirm_remove_folder(p, d))
             folder_row.add_suffix(remove_btn)
@@ -1843,10 +2313,20 @@ class EaselWindow(Adw.ApplicationWindow):
             subtitle="Rescan automatically when files in your photo folders change")
         self.settings.bind("watch-folders", watch_row, "active", Gio.SettingsBindFlags.DEFAULT)
         folders.add(watch_row)
+        hidden_row = Adw.SwitchRow(
+            title="Show hidden album",
+            subtitle="Show a Hidden album in the Albums tab, where you can review "
+                     "and un-hide photos you've hidden")
+        self.settings.bind("show-hidden-album", hidden_row, "active",
+                           Gio.SettingsBindFlags.DEFAULT)
+        folders.add(hidden_row)
         page.add(folders)
 
-        danger = Adw.PreferencesGroup(title="Reset")
-        delete_row = Adw.ActionRow(title="Delete Library…", activatable=True)
+        danger = Adw.PreferencesGroup(
+            title="Reset",
+            description="Easel only reads your folders — disconnecting forgets "
+                        "them here but never deletes anything on disk.")
+        delete_row = Adw.ActionRow(title="Disconnect All Folders…", activatable=True)
         delete_row.add_css_class("error")
         delete_row.connect("activated", lambda *_: self._confirm_wipe_library(dialog))
         danger.add(delete_row)
@@ -1857,20 +2337,21 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _confirm_remove_folder(self, path, prefs_dialog):
         confirm = Adw.AlertDialog(
-            heading="Remove folder?",
-            body=f"Photos from “{path}” will be removed from your library. "
-                 "Files on disk are not touched.")
+            heading="Disconnect folder?",
+            body=f"Easel will stop showing photos from “{path}” and forget its "
+                 "favourites and people tags. The folder and your photos on disk "
+                 "are not touched — you can reconnect it any time.")
         confirm.add_response("cancel", "Cancel")
-        confirm.add_response("remove", "Remove")
-        confirm.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.add_response("disconnect", "Disconnect")
+        confirm.set_response_appearance("disconnect", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_response(_d, response):
-            if response != "remove":
+            if response != "disconnect":
                 return
             lib.remove_folder(self.con, path)
             self._reload_all()
             self._refresh_watchers()
-            self._toast("Folder removed")
+            self._toast("Folder disconnected")
             prefs_dialog.close()
 
         confirm.connect("response", on_response)
@@ -1878,21 +2359,22 @@ class EaselWindow(Adw.ApplicationWindow):
 
     def _confirm_wipe_library(self, prefs_dialog):
         confirm = Adw.AlertDialog(
-            heading="Delete entire library?",
-            body="All albums, photos and favourites will be erased from the "
-                 "library. Your photo files on disk are not touched.")
+            heading="Disconnect all folders?",
+            body="Easel will forget every folder you've added, along with all "
+                 "favourites and people tags. Your photo files on disk are not "
+                 "touched — nothing is deleted.")
         confirm.add_response("cancel", "Cancel")
-        confirm.add_response("delete", "Delete Library")
-        confirm.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.add_response("disconnect", "Disconnect All")
+        confirm.set_response_appearance("disconnect", Adw.ResponseAppearance.DESTRUCTIVE)
 
         def on_response(_d, response):
-            if response != "delete":
+            if response != "disconnect":
                 return
             lib.wipe_library(self.con)
             self._close_info()
             self._reload_all()
             self._refresh_watchers()
-            self._toast("Library deleted")
+            self._toast("All folders disconnected")
             prefs_dialog.close()
 
         confirm.connect("response", on_response)
@@ -1902,6 +2384,8 @@ class EaselWindow(Adw.ApplicationWindow):
         self._monitors = []
         self._watch_debounce = 0
         self.settings.connect("changed::watch-folders", lambda *_: self._refresh_watchers())
+        # Toggling the Hidden album adds/removes its pinned card in the Albums tab.
+        self.settings.connect("changed::show-hidden-album", lambda *_: self._reload_all())
         self._refresh_watchers()
 
     # ---------- importing (files + drag-and-drop) ----------
@@ -1923,54 +2407,21 @@ class EaselWindow(Adw.ApplicationWindow):
         self._import_paths(paths)
         return True
 
-    def _on_add_photos(self):
-        dialog = Gtk.FileDialog(title="Add Photos")
-        file_filter = Gtk.FileFilter()
-        file_filter.set_name("Images and videos")
-        for ext in sorted(lib.MEDIA_EXT):
-            file_filter.add_suffix(ext.lstrip("."))
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(file_filter)
-        dialog.set_filters(filters)
-        dialog.open_multiple(self, None, self._photos_chosen)
-
-    def _photos_chosen(self, dialog, result):
-        try:
-            files = dialog.open_multiple_finish(result)
-        except GLib.Error:
-            return
-        paths = [f.get_path() for f in files if f and f.get_path()]
-        self._import_paths(paths)
-
     def _import_paths(self, paths):
-        """Index dropped/opened files: media files individually, folders as
-        watched photo folders. Runs off the main thread; scanning can be slow."""
+        """Index dropped files: media files individually, folders as watched
+        photo folders. Runs off the main thread with a progress toast."""
         if not paths:
             return
-        self._toast("Importing…")
 
-        def work():
-            count = 0
+        def scan(progress):
             for path in paths:
                 if os.path.isdir(path):
                     lib.add_folder(self.con, path)
-                    lib.scan_folder(self.con, path)
-                    count += 1
+                    lib.scan_folder(self.con, path, progress)
                 elif os.path.splitext(path)[1].lower() in lib.MEDIA_EXT:
                     lib.scan_file(self.con, path)
-                    count += 1
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._refresh_watchers)
-            GLib.idle_add(lambda: self._toast_imported(count))
 
-        threading.Thread(target=work, daemon=True).start()
-
-    def _toast_imported(self, count):
-        if count:
-            self._toast(f"Imported {count} item{'s' if count != 1 else ''}")
-        else:
-            self._toast("Nothing to import")
-        return False
+        self._run_scan(scan, "Importing…", refresh_watchers=True)
 
     def _refresh_watchers(self):
         for monitor in self._monitors:
@@ -2014,69 +2465,73 @@ class EaselWindow(Adw.ApplicationWindow):
     def _toast(self, text):
         self.toast_overlay.add_toast(Adw.Toast.new(text))
 
-    def _on_sort_mode(self, action, param):
-        group = SORT_GROUP_FOR_TAB.get(self.view)
-        if not group:
-            return
-        mode = param.get_string()
-        action.set_state(param)
-        self._sort[group] = mode
-        self.settings.set_string(f"sort-{group}", mode)
-        self._apply_filters()
-
-    def _update_sort_button(self):
-        group = SORT_GROUP_FOR_TAB.get(self.view)
-        self.sort_btn.set_visible(group is not None)
-        if group is None:
-            return
-        menu = Gio.Menu()
-        section = Gio.Menu()
-        for label, mode in SORT_OPTIONS[group]:
-            item = Gio.MenuItem.new(label, None)
-            item.set_action_and_target_value("win.sort-mode", GLib.Variant("s", mode))
-            section.append_item(item)
-        menu.append_section("Sort by", section)
-        self.sort_btn.set_menu_model(menu)
-        action = self.lookup_action("sort-mode")
-        if action:
-            action.set_state(GLib.Variant("s", self._sort[group]))
-
-    def _select_tab(self, name):
+    def _select_tab(self, name, close_panel=True):
+        # Switching tabs drops any selected photo and closes the info panel
+        # (internal re-renders pass close_panel=False so a background reload
+        # doesn't yank an open panel away).
+        if close_panel and self.info_revealer.get_reveal_child():
+            self._close_info()
         self.view = name
         self._last_tab = name
-        if not self._photos_all and name in ("all_photos", "months", "years", "favourites"):
+        if not self._photos_all and name == "all_photos":
             self.paper_stack.set_visible_child_name("empty")
         else:
             self.paper_stack.set_visible_child_name(name)
-            if name == "months":
-                self._render_months()
-            elif name == "years":
-                self._render_years()
+            if name == "map":
+                self._render_map()
+            elif name == "people":
+                self._render_people()
         self.detail_back_row.set_visible(False)
-        self._update_sort_button()
         for key, btn in self._tab_buttons.items():
             if key == name:
                 btn.add_css_class("tab-active")
             else:
                 btn.remove_css_class("tab-active")
 
+    def _activate_album_item(self, item):
+        """A card was clicked: open the Favourites/Hidden special album, drill
+        into a folder node, or open a user-created album."""
+        if item is None:
+            return
+        if item.special:
+            self._open_detail((item.special,))
+        elif item.folder:
+            self._open_folder(item.path)
+        else:
+            self._open_album(item.id)
+
     def _open_album(self, album_id):
         if not lib.get_album(self.con, album_id):
             return
         self._open_detail(("album", album_id))
 
-    def _open_period(self, kind, key, title):
-        self._open_detail(("period", kind, key, title))
+    def _open_folder(self, path):
+        if path not in (self._folder_nodes or {}):
+            return
+        self._open_detail(("folder", path))
 
     def _open_detail(self, source):
         self.view = "detail"
         self._detail_source = source
         self.paper_stack.set_visible_child_name("detail")
         self.detail_back_row.set_visible(True)
-        self.sort_btn.set_visible(False)
         self._render_detail()
 
     def _go_back(self):
+        # Inside the folder tree, "back" climbs to the parent folder; at a root
+        # (or any other detail) it returns to the tab you came from.
+        source = self._detail_source
+        if source and source[0] == "folder":
+            node = (self._folder_nodes or {}).get(source[1])
+            parent = node["parent"] if node else None
+            # Climb to the parent folder — unless the parent is a watched root,
+            # which the Folders tab skips, so go back to that tab instead.
+            if (parent and parent in self._folder_nodes
+                    and parent not in self._folder_roots):
+                self._open_folder(parent)
+                return
+            self._select_tab("folders")
+            return
         self._select_tab(self._last_tab if self._last_tab in VIEW_NAMES else "all_photos")
 
     def _clear_box(self, box):
@@ -2091,6 +2546,7 @@ class EaselWindow(Adw.ApplicationWindow):
         if not source:
             self._go_back()
             return
+        subfolders = []       # folder cards shown above the photos (tree view)
         if source[0] == "album":
             album = lib.get_album(self.con, source[1])
             if not album:
@@ -2101,15 +2557,64 @@ class EaselWindow(Adw.ApplicationWindow):
             photos = [self._photo_from_row(r)
                       for r in lib.photos_by_album(self.con, album["id"])]
             date = _fmt_date(album["date_taken"])
-        else:  # ("period", kind, key, title)
-            _, kind, key, title = source
-            kind_label = "Month" if kind == "month" else "Year"
-            photos = [p for p in self._visible_photos
-                      if self._period_of(p.date_taken, kind)[0] == key]
-            photos.sort(key=lambda p: p.date_taken)
-            cover = photos[-1].path if photos else None
+        elif source[0] in ("favourites", "hidden"):
+            if source[0] == "favourites":
+                kind_label, title = "Album", "Favourites"
+                photos = [p for p in self._photos_all if p.favorite]
+            else:
+                kind_label, title = "Album", "Hidden"
+                photos = [self._photo_from_row(r)
+                          for r in lib.hidden_photos(self.con)]
+            cover = photos[0].path if photos else None
             date = ""
+        elif source[0] == "folder":
+            node = (self._folder_nodes or {}).get(source[1])
+            if not node:
+                self._go_back()
+                return
+            kind_label, title = "Folder", node["title"]
+            cover = node["cover"] or None
+            date = ""
+            subfolders = self._folder_child_items(node)
+            if node["album_id"]:
+                photos = [self._photo_from_row(r)
+                          for r in lib.photos_by_album(self.con, node["album_id"])]
+            else:
+                photos = []
+            # Stats describe the whole subtree; the photos grid shows only the
+            # photos that live directly in this folder, sub-folders hold the rest.
+            total = node["total"]
+            self._detail_photos = photos
+            self._render_subfolders(subfolders)
+            self.detail_kind_label.set_label(kind_label)
+            self._clear_box(self.detail_hero_slot)
+            hero = Swatch("album", size=108)
+            hero.set_path(cover)
+            self.detail_hero_slot.append(hero)
+            self.detail_name_label.set_label(title)
+            parts = [f"{total} photo{'s' if total != 1 else ''}"]
+            if subfolders:
+                k = len(subfolders)
+                parts.append(f"{k} folder{'s' if k != 1 else ''}")
+            self.detail_stats_label.set_label(" · ".join(parts))
+            self._fill_store(self.detail_store, self._detail_photos)
+            self._schedule_resize_tiles()
+            return
+        elif source[0] == "person":
+            person = lib.get_person(self.con, source[1])
+            if not person:
+                self._go_back()
+                return
+            kind_label, title = "Person", person["name"]
+            photos = [self._photo_from_row(r)
+                      for r in lib.photos_for_person(self.con, person["id"])]
+            cover = photos[0].path if photos else None
+            date = ""
+        else:
+            self._go_back()
+            return
 
+        self._render_subfolders(subfolders)  # empty for non-folder detail: hides it
         self.detail_kind_label.set_label(kind_label)
         self._clear_box(self.detail_hero_slot)
         hero = Swatch(kind_label.lower(), size=108)
@@ -2124,9 +2629,94 @@ class EaselWindow(Adw.ApplicationWindow):
         self.detail_stats_label.set_label(" · ".join(parts))
 
         self._detail_photos = photos
-        self.detail_store.remove_all()
-        for p in self._detail_photos:
-            self.detail_store.append(p)
+        self._fill_store(self.detail_store, self._detail_photos)
+        self._schedule_resize_tiles()
+
+    @staticmethod
+    def _folder_card(node):
+        return Album(id=node["album_id"] or 0, title=node["title"], path=node["path"],
+                     photo_count=node["total"], cover_path=node["cover"] or "",
+                     folder=True, subfolder_count=len(node["children"]))
+
+    def _folder_child_items(self, node):
+        return [self._folder_card(self._folder_nodes[c]) for c in node["children"]
+                if c in self._folder_nodes]
+
+    def _render_subfolders(self, items):
+        self._fill_store(self.detail_folders_store, items)
+        self.detail_folders_grid.set_visible(bool(items))
+
+    # ---------- map view ----------
+
+    def _render_map(self):
+        """Pin every geotagged photo on the offline world map. The first time
+        it's opened in a session we also read GPS from any photo that hasn't
+        been checked yet (a background pass), then refresh the pins."""
+        rows = lib.photos_with_location(self.con)
+        entries = [(r["lon"], r["lat"], self._photo_from_row(r)) for r in rows]
+        self._map_view.set_photos(entries)
+        self.map_stack.set_visible_child_name("view" if entries else "empty")
+        self._maybe_backfill_locations()
+
+    def _maybe_backfill_locations(self):
+        if self._gps_backfilled or not self._photos_all:
+            return
+        self._gps_backfilled = True
+
+        def work():
+            found = lib.backfill_locations(self.con)
+            if found:
+                GLib.idle_add(self._refresh_map_if_current)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_map_if_current(self):
+        if self.view == "map":
+            self._render_map()
+        return False
+
+    def _on_map_pin(self, photos):
+        """A map pin was clicked: open its photos in the lightbox."""
+        if photos:
+            self._open_lightbox(photos, 0)
+
+    # ---------- people view ----------
+
+    def _render_people(self):
+        self._fill_store(self.people_store, self._persons_all)
+        self.people_stack.set_visible_child_name(
+            "view" if self._persons_all else "empty")
+
+    def _bind_person_card(self, item):
+        person = item.get_item()
+        box = item.get_child()
+        if not hasattr(box, "swatch"):
+            box = self._album_card_widget()  # same card, cover styled by .card-cover
+            item.set_child(box)
+        box.swatch.set_size(self._card_cell_px())
+        box.swatch.set_placeholder("person")
+        box.swatch.set_path(person.cover_path or None)
+        box.title.set_label(person.name)
+        count = person.photo_count
+        box.subtitle.set_label(f"{count} photo{'s' if count != 1 else ''}")
+        self._attach_person_menu(box, person.id)
+
+    def _attach_person_menu(self, box, person_id):
+        box._menu_kind = "person"
+        box._menu_item_id = person_id
+        box._menu_entries = PERSON_ENTRIES
+        box._menu_extra = {}
+        if getattr(box, "_person_menu_attached", False):
+            return
+        box._person_menu_attached = True
+        gesture = Gtk.GestureClick(button=3)
+        gesture.connect("pressed", lambda _g, _n, x, y: self._show_item_menu(box, box, x, y))
+        box.add_controller(gesture)
+
+    def _open_person(self, person_id):
+        if not lib.get_person(self.con, person_id):
+            return
+        self._open_detail(("person", person_id))
 
     # ---------- search / filters ----------
 
@@ -2134,40 +2724,66 @@ class EaselWindow(Adw.ApplicationWindow):
         self._search_query = entry.get_text().strip().lower()
         self._apply_filters()
 
-    def _sorted_photos(self, photos):
-        if self._sort["photos"] == "name":
-            return sorted(photos, key=lambda p: os.path.basename(p.path).lower())
+    @staticmethod
+    def _sorted_photos(photos):
+        # Always newest first — the one order that makes sense for a photo
+        # library, so there's no sort control to fuss with.
         return sorted(photos, key=lambda p: -p.date_taken)
 
-    def _sorted_albums(self, albums):
-        mode = self._sort["albums"]
-        if mode == "date":
-            return sorted(albums, key=lambda a: -a.date_taken)
-        if mode == "count":
-            return sorted(albums, key=lambda a: (-a.photo_count, a.title.lower()))
+    @staticmethod
+    def _sorted_albums(albums):
+        # Folders and albums read best by name.
         return sorted(albums, key=lambda a: a.title.lower())
 
+    def _photo_datetext(self, p):
+        """Searchable date text for a photo: year plus month name (full and
+        abbreviated), so "2014", "march" and "mar" all match."""
+        if not p.date_taken:
+            return ""
+        try:
+            dt = datetime.fromtimestamp(p.date_taken)
+        except (ValueError, OSError):
+            return ""
+        return f"{dt.strftime('%Y')} {dt.strftime('%B')} {dt.strftime('%b')}".lower()
+
     def _photo_matches(self, p, q):
-        return not q or q in os.path.basename(p.path).lower() or q in (p.album or "").lower()
+        if not q:
+            return True
+        if q in os.path.basename(p.path).lower():
+            return True
+        if q in (p.album or "").lower():
+            return True
+        # People tagged in the photo.
+        for name in self._photo_people.get(p.id, ()):
+            if q in name.lower():
+                return True
+        # Date: year / month name.
+        return q in self._photo_datetext(p)
+
+    @staticmethod
+    def _fill_store(store, items):
+        # One splice instead of N appends: the model emits a single
+        # items-changed, so the grid updates once even for thousands of photos
+        # (per-item appends made loading a big library crawl).
+        store.splice(0, store.get_n_items(), list(items))
 
     def _apply_filters(self):
         q = self._search_query
 
         self._visible_photos = [p for p in self._sorted_photos(self._photos_all)
                                 if self._photo_matches(p, q)]
-        self.photo_store.remove_all()
-        for p in self._visible_photos:
-            self.photo_store.append(p)
+        self._fill_store(self.photo_store, self._visible_photos)
 
-        self.album_store.remove_all()
-        for a in self._sorted_albums(self._albums_all):
-            if not q or q in a.title.lower():
-                self.album_store.append(a)
+        folders = [a for a in self._sorted_albums(self._folder_cards)
+                   if not q or q in a.title.lower()]
+        self._fill_store(self.folders_store, folders)
 
-        self._visible_favs = [p for p in self._visible_photos if p.favorite]
-        self.fav_store.remove_all()
-        for p in self._visible_favs:
-            self.fav_store.append(p)
+        # Albums keep the pinned specials (Favourites/Hidden) first, then the
+        # user albums sorted by name.
+        pinned = [a for a in self._albums_all if a.special]
+        rest = self._sorted_albums([a for a in self._albums_all if not a.special])
+        albums = [a for a in pinned + rest if not q or q in a.title.lower()]
+        self._fill_store(self.album_store, albums)
 
     # ---------- library loading ----------
 
@@ -2175,18 +2791,44 @@ class EaselWindow(Adw.ApplicationWindow):
         dialog = Gtk.FileDialog()
         dialog.select_folder(self, None, self._folder_chosen)
 
-    def _on_rescan(self):
-        self._toast("Rescanning library…")
+    def _run_scan(self, scan_fn, start_msg, refresh_watchers=False):
+        """Run a scan on a worker thread while a single, persistent toast shows
+        live progress ("Scanning… 1,234 of 7,000"), so a big import never looks
+        stuck. scan_fn(progress_cb) does the work; progress_cb(done, total) is
+        called from the worker and throttled onto the main thread."""
+        toast = Adw.Toast.new(start_msg)
+        toast.set_timeout(0)  # stays until we dismiss it
+        self.toast_overlay.add_toast(toast)
+        state = {"last": 0.0}
+
+        def progress(done, total):
+            now = time.monotonic()
+            if not total or (done < total and now - state["last"] < 0.1):
+                return
+            state["last"] = now
+            GLib.idle_add(
+                lambda: toast.set_title(f"Scanning… {done:,} of {total:,}") or False)
 
         def work():
-            lib.scan_all(self.con)
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._toast_photo_count)
+            scan_fn(progress)
+
+            def finish():
+                toast.dismiss()
+                self._reload_all()
+                if refresh_watchers:
+                    self._refresh_watchers()
+                self._toast_photo_count()
+                return False
+
+            GLib.idle_add(finish)
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _on_rescan(self):
+        self._run_scan(lambda cb: lib.scan_all(self.con, cb), "Rescanning library…")
+
     def _toast_photo_count(self):
-        self._toast(f"Library updated — {len(self._photos_all)} photos")
+        self._toast(f"Library updated — {len(self._photos_all):,} photos")
         return False
 
     def _folder_chosen(self, dialog, result):
@@ -2198,15 +2840,23 @@ class EaselWindow(Adw.ApplicationWindow):
             return
         path = folder.get_path()
         lib.add_folder(self.con, path)
-        self._toast("Scanning folder…")
+        self._run_scan(lambda cb: lib.scan_folder(self.con, path, cb),
+                       "Scanning folder…", refresh_watchers=True)
 
-        def work():
-            lib.scan_folder(self.con, path)
-            GLib.idle_add(self._reload_all)
-            GLib.idle_add(self._refresh_watchers)
-            GLib.idle_add(self._toast_photo_count)
-
-        threading.Thread(target=work, daemon=True).start()
+    def _special_albums(self):
+        """The pinned albums at the top of the Albums tab: Favourites always,
+        and Hidden when the Settings switch is on."""
+        albums = []
+        favs = [p for p in self._photos_all if p.favorite]
+        albums.append(Album(title="Favourites", special="favourites", folder=False,
+                            photo_count=len(favs),
+                            cover_path=(favs[0].path if favs else "")))
+        if self.settings.get_boolean("show-hidden-album"):
+            hidden = lib.hidden_photos(self.con)
+            albums.append(Album(title="Hidden", special="hidden", folder=False,
+                                photo_count=len(hidden),
+                                cover_path=(hidden[0]["path"] if hidden else "")))
+        return albums
 
     def _photo_from_row(self, r):
         return Photo(id=r["id"], path=r["path"], album=r["album_title"] or "",
@@ -2215,16 +2865,38 @@ class EaselWindow(Adw.ApplicationWindow):
                      rotation=(r["rotation"] or 0) if "rotation" in r.keys() else 0)
 
     def _reload_all(self):
+        # Hidden photos never appear in the normal views — only inside the
+        # Hidden album (see the "hidden" detail source).
         self._photos_all = [self._photo_from_row(r) for r in lib.all_photos(self.con)]
-        self._albums_all = [
-            Album(id=r["id"], title=r["title"], path=r["path"] or "",
+        # The folder tree drives the Folders view: each watched root is a folder
+        # card you drill into. The Albums view holds user-created albums, with
+        # Favourites (and Hidden, when enabled) pinned first.
+        self._folder_nodes, self._folder_roots = lib.folder_tree(self.con)
+        # Skip the root folder itself: the Folders tab shows the actual folders
+        # inside each watched root, so there's no pointless extra click. A root
+        # with no sub-folders (a flat library) is shown as-is.
+        top = []
+        for path in self._folder_roots:
+            node = self._folder_nodes[path]
+            top.extend(node["children"] or [path])
+        self._folder_cards = [self._folder_card(self._folder_nodes[p]) for p in top]
+        self._user_albums = [
+            Album(id=r["id"], title=r["title"], path="",
                   photo_count=r["photo_count"] or 0, cover_path=r["cover_path"] or "",
-                  date_taken=r["date_taken"] or 0.0)
-            for r in lib.all_albums(self.con)
+                  date_taken=r["date_taken"] or 0.0, folder=False)
+            for r in lib.all_albums(self.con) if not r["path"]
         ]
+        self._albums_all = self._special_albums() + self._user_albums
+        self._persons_all = [
+            Person(id=r["id"], name=r["name"], photo_count=r["photo_count"] or 0,
+                   cover_path=r["cover_path"] or "", date_taken=r["date_taken"] or 0.0)
+            for r in lib.all_persons(self.con)
+        ]
+        self._photo_people = lib.people_by_photo(self.con)
         self._apply_filters()
         if self.view == "detail" and self._detail_source is not None:
             self._render_detail()
         elif self.view in VIEW_NAMES:
-            self._select_tab(self.view)
+            self._select_tab(self.view, close_panel=False)
+        self._schedule_resize_tiles()
         return False

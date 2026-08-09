@@ -33,6 +33,10 @@ easel_sources = [
   'library.py',
   'models.py',
   'widgets.py',
+  'worldmap.py',
 ]
 
 install_data(easel_sources, install_dir: moduledir)
+
+# Binary vector map data (Natural Earth 1:10m), loaded by worldmap.py.
+install_data('worldmap.bin', install_dir: moduledir)

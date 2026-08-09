@@ -20,5 +20,7 @@
     <file>icons/scalable/actions/easel-crop-symbolic.svg</file>
     <file>icons/scalable/actions/easel-flip-horizontal-symbolic.svg</file>
     <file>icons/scalable/actions/easel-flip-vertical-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-map-symbolic.svg</file>
+    <file>icons/scalable/actions/easel-people-symbolic.svg</file>
   </gresource>
 </gresources>

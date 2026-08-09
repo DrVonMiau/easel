@@ -9,9 +9,13 @@ import hashlib
 import math
 import os
 import sys
+import threading
+import time
 from collections import OrderedDict
 
-from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk
+from gi.repository import Gdk, GLib, Graphene, Gsk, Gtk, Pango
+
+from . import worldmap
 
 # Report the first few image-load failures to stderr, with the reason, so a
 # problem that only shows up in the packaged runtime (a permission error vs a
@@ -72,7 +76,11 @@ def _thumb_cache_file(path, dim, rotation, mtime):
 # into view) decode first. Processed on the main thread via an idle handler.
 _load_stack = []
 _load_idle_id = 0
-_LOAD_BATCH = 2  # decodes per idle cycle — small, so the UI stays responsive
+# Decode for up to this many seconds per idle cycle, then yield to the frame
+# clock. A time budget (rather than a fixed count) fills the visible grid as
+# fast as each machine allows while keeping scrolling smooth — a fixed small
+# count left fast machines needlessly slow and slow ones still janky.
+_LOAD_BUDGET = 0.010
 
 def _render_texture(texture, rotation=0, max_dim=None):
     """Return a new Gdk.Texture that is `texture` optionally rotated by a
@@ -178,8 +186,13 @@ def _decode_scaled(path, size, rotation=0):
 
 def _process_load_stack():
     global _load_idle_id
-    processed = 0
-    while _load_stack and processed < _LOAD_BATCH:
+    if not _video_gate.is_set():
+        # A video is playing — stop decoding on the main thread so it doesn't
+        # stutter playback. Re-kicked by suspend_video_thumbnails(False).
+        _load_idle_id = 0
+        return False
+    start = time.monotonic()
+    while _load_stack:
         path, size, rotation, key, wants, callback = _load_stack.pop()  # LIFO
         # Skip work the caller no longer wants (tile recycled / scrolled away)
         # so a big backlog never forces thousands of pointless decodes.
@@ -191,7 +204,10 @@ def _process_load_stack():
             if texture is not None:
                 _cache_put(key, texture)
         callback(path, texture)
-        processed += 1
+        # At least one decode runs per cycle; stop once the budget is spent so
+        # the frame clock gets a turn.
+        if time.monotonic() - start >= _LOAD_BUDGET:
+            break
     if _load_stack:
         return True  # keep the idle handler running
     _load_idle_id = 0
@@ -215,10 +231,155 @@ def request_thumbnail(path, size, wants, callback, rotation=0):
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    if _is_video(path):
+        # Videos can't be decoded as images; a frame is grabbed with GStreamer
+        # off the main thread and cached, then loaded like any other thumbnail.
+        _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback)
+        return None
     _load_stack.append((path, size, rotation, key, wants, callback))
     if not _load_idle_id:
         _load_idle_id = GLib.idle_add(_process_load_stack)
     return None
+
+
+_VIDEO_EXT = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv",
+              ".3gp", ".mpg", ".mpeg", ".ogv", ".ts", ".mts"}
+_video_pool = None
+_video_inflight = set()
+# One worker (video decode is expensive), and a gate that pauses background
+# frame-grabbing while a video is actually playing so it doesn't fight the
+# player for CPU — software decoding in the sandbox has no headroom to share.
+_video_gate = threading.Event()
+_video_gate.set()
+
+
+def suspend_video_thumbnails(suspend):
+    global _load_idle_id
+    if suspend:
+        _video_gate.clear()
+    else:
+        _video_gate.set()
+        # Resume any paused main-thread thumbnail decoding.
+        if _load_stack and not _load_idle_id:
+            _load_idle_id = GLib.idle_add(_process_load_stack)
+
+
+def _is_video(path):
+    return os.path.splitext(path)[1].lower() in _VIDEO_EXT
+
+
+def _load_cache_texture(cache_file):
+    try:
+        return Gdk.Texture.new_from_filename(cache_file)
+    except Exception:
+        return None
+
+
+def _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback):
+    """Serve a video's poster frame: from the PNG cache if present, else bake it
+    on a small background pool (GStreamer + GSK scale, both thread-safe) and
+    deliver it on the main thread. Any failure leaves the placeholder."""
+    global _video_pool
+    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
+    cache_file = _thumb_cache_file(path, dim, rotation, mtime)
+    if os.path.exists(cache_file):
+        tex = _load_cache_texture(cache_file)
+        if tex is not None:
+            _cache_put(key, tex)
+        callback(path, tex)
+        return
+    if path in _video_inflight:      # already being baked; placeholder for now
+        callback(path, None)
+        return
+    _video_inflight.add(path)
+    if _video_pool is None:
+        import concurrent.futures
+        _video_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    def work():
+        # Wait here while a video is playing (gate cleared), so the frame-grab
+        # doesn't compete with the player; the timeout keeps it from stalling
+        # forever if a resume is somehow missed.
+        _video_gate.wait(timeout=30)
+        # Only the GStreamer decode/seek (bounded, its own threads) runs here.
+        try:
+            frame = _extract_video_frame(path)
+        except Exception:
+            frame = None
+
+        def done():
+            # Scale, cache and load happen on the main thread — same GSK/decode
+            # path as images, which isn't reliable off-thread.
+            _video_inflight.discard(path)
+            tex = None
+            if frame is not None and (wants is None or wants()):
+                try:
+                    scaled = _render_texture(frame, rotation, max_dim=dim)
+                    if scaled is not None and _texture_to_cache(scaled, cache_file):
+                        tex = _load_cache_texture(cache_file)
+                except Exception:
+                    tex = None
+                if tex is not None:
+                    _cache_put(key, tex)
+            callback(path, tex)
+            return False
+
+        GLib.idle_add(done)
+
+    _video_pool.submit(work)
+
+
+def _extract_video_frame(path):
+    """A representative frame of a video as a Gdk.Texture, or None. Uses a short,
+    bounded GStreamer pipeline; safe to call off the main thread."""
+    import gi
+    try:
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+    except (ValueError, ImportError):
+        return None
+    if not Gst.is_initialized():
+        Gst.init(None)
+    pipeline = Gst.parse_launch(
+        "uridecodebin name=src ! videoconvert ! videoscale ! "
+        "appsink name=sink caps=video/x-raw,format=RGB,pixel-aspect-ratio=1/1")
+    src = pipeline.get_by_name("src")
+    src.set_property("uri", Gst.filename_to_uri(path))
+    sink = pipeline.get_by_name("sink")
+    sink.set_property("sync", False)
+    try:
+        pipeline.set_state(Gst.State.PAUSED)
+        res, _state, _p = pipeline.get_state(5 * Gst.SECOND)
+        if res != Gst.StateChangeReturn.SUCCESS:
+            return None
+        ok, dur = pipeline.query_duration(Gst.Format.TIME)
+        if ok and dur > 0:                       # a second in, or a third of the way
+            pos = min(int(1 * Gst.SECOND), dur // 3)
+            if pos > 0:
+                pipeline.seek_simple(
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, pos)
+                pipeline.get_state(5 * Gst.SECOND)
+        sample = sink.emit("pull-preroll")
+        if sample is None:
+            return None
+        struct = sample.get_caps().get_structure(0)
+        w = struct.get_value("width")
+        h = struct.get_value("height")
+        if not w or not h:
+            return None
+        buf = sample.get_buffer()
+        ok, minfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return None
+        try:
+            data = GLib.Bytes.new(bytes(minfo.data))
+        finally:
+            buf.unmap(minfo)
+        stride = ((w * 3 + 3) // 4) * 4          # GStreamer pads RGB rows to 4 bytes
+        return Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8, data, stride)
+    finally:
+        pipeline.set_state(Gst.State.NULL)
 
 
 def load_full_texture(path, rotation=0):
@@ -828,6 +989,34 @@ class CropOverlay(Gtk.Widget):
         self._drag_start = None
 
 
+class EaselGridView(Gtk.GridView):
+    """A GtkGridView that reports its real allocated content width the instant
+    it changes. GtkGridView sizes rows from a child's constant natural height
+    (it doesn't do height-for-width), so to get square cells the window must set
+    each swatch's fixed size to the true column width — and the only reliable
+    source of that width, across resizes, panel toggles, scrollbars and stack
+    transitions, is the widget's own size-allocate. Reading get_width() later
+    (e.g. from a scroll adjustment signal) gave stale values for grids nested in
+    a box, which left tall cells and big row gaps."""
+
+    __gtype_name__ = "EaselGridView"
+
+    # Class default so the widget works even when GtkBuilder instantiates it
+    # without calling Python __init__ (a known PyGObject gotcha).
+    _width_cb = None
+
+    def set_width_cb(self, cb):
+        self._width_cb = cb
+
+    def do_size_allocate(self, width, height, baseline):
+        Gtk.GridView.do_size_allocate(self, width, height, baseline)
+        # Report the true content width on every allocation (resize, panel
+        # toggle, scrollbar, becoming visible in a new folder). The window's
+        # handler is idempotent, so re-reporting the same width is cheap.
+        if self._width_cb is not None and width > 1:
+            self._width_cb(self, width)
+
+
 class Swatch(Gtk.Widget):
     """A square artwork swatch: draws the thumbnail texture (cover-cropped) when
     a path is set, otherwise a diagonal-striped placeholder.
@@ -843,12 +1032,33 @@ class Swatch(Gtk.Widget):
         super().__init__()
         self._size = size
         self._texture = None
+        self._fill = False
         self._placeholder_text = placeholder_text  # kept for API compatibility
         self.set_overflow(Gtk.Overflow.HIDDEN)
         self.add_css_class("swatch")
         self.set_path(None)
 
+    def set_fill(self, fill):
+        """Fill mode (photo tiles and card covers): the width shrinks to
+        whatever the grid column / card gives it (minimum 0, so it never forces
+        the window wider), and the *height follows the width* — a true square
+        that fills its cell whatever width it's handed. Because height tracks
+        the actual allocated width, every cell in a row ends up the same height,
+        so there are no stray row gaps. Covers/previews that leave this off stay
+        a fixed square."""
+        if fill != self._fill:
+            self._fill = fill
+            self.queue_resize()
+
     def do_measure(self, orientation, for_size):
+        # Fill mode: width may shrink to 0 so the swatch always fits its column
+        # (never forcing the window wider); height is the fixed _size. GtkGridView
+        # doesn't do height-for-width — it takes the child's constant natural
+        # height as the row height — so the window sets _size to the grid's real
+        # column width (EaselGridView reports it on allocation) to keep cells
+        # square. Non-fill swatches are a plain fixed square.
+        if self._fill and orientation == Gtk.Orientation.HORIZONTAL:
+            return (0, self._size, -1, -1)
         return (self._size, self._size, -1, -1)
 
     def set_size(self, size):
@@ -907,3 +1117,536 @@ class Swatch(Gtk.Widget):
             snapshot.append_color(rgba, Graphene.Rect().init(-diag, y, diag * 2, STRIPE_WIDTH))
             y += STRIPE_STEP
         snapshot.restore()
+
+
+POINTER_CURSOR = Gdk.Cursor.new_from_name("pointer")
+
+
+def _rgba(r, g, b, a):
+    c = Gdk.RGBA()
+    c.red, c.green, c.blue, c.alpha = r, g, b, a
+    return c
+
+
+# Pin accent — Easel Blue (the interactive token). A single shade reads well on
+# both the light and dark map backdrop, matching how the CSS uses it.
+_PIN = _rgba(0x55 / 255, 0x65 / 255, 0xBF / 255, 1.0)
+_WHITE = _rgba(1.0, 1.0, 1.0, 1.0)
+
+# Offline map palette — fixed blue water / green land, like an online slippy
+# map (so it doesn't invert with the app's light/dark theme).
+_MAP_SEA = _rgba(0xA8 / 255, 0xD5 / 255, 0xE2 / 255, 1.0)
+_MAP_LAND = _rgba(0xCC / 255, 0xE6 / 255, 0xA6 / 255, 1.0)
+_MAP_COAST = _rgba(0x6E / 255, 0x8E / 255, 0x63 / 255, 0.8)
+_MAP_BORDER = _rgba(0x7A / 255, 0x84 / 255, 0x6A / 255, 0.55)
+# Rivers read as water (a touch deeper than the sea so they show on land);
+# roads are a faint warm line that only appears when you zoom in; city dots
+# and labels are a muted ink with a soft light halo for legibility on land.
+_MAP_RIVER = _rgba(0x5B / 255, 0x9F / 255, 0xC4 / 255, 0.9)
+_MAP_ROAD = _rgba(0xC8 / 255, 0x8A / 255, 0x55 / 255, 0.7)
+_MAP_CITY = _rgba(0x3A / 255, 0x3F / 255, 0x4A / 255, 0.95)
+_MAP_CITY_HALO = _rgba(1.0, 1.0, 1.0, 0.85)
+_MAP_LABEL = _rgba(0x2B / 255, 0x30 / 255, 0x3A / 255, 1.0)
+
+
+class MapView(Gtk.Widget):
+    """An offline, zoomable vector world map that pins photos by location.
+
+    The default Map view. The world is drawn from built-in Natural Earth 1:10m
+    vector geometry (worldmap.py — land, lakes, country borders) with no tiles,
+    no network and no image decoding (which is what fails in the sandbox), and
+    it's crisp at any zoom because it's vector. Scroll or pinch to zoom, drag to
+    pan. Photos are projected equirectangularly and clustered by screen
+    distance, so nearby shots share one pin and separate as you zoom in;
+    clicking a pin opens all of its photos.
+
+    Everything is painted with GSK nodes in do_snapshot — filled/stroked paths
+    for land/lakes/borders, rounded-clip circles and a text layout for pins —
+    the drawing path that paints reliably in this runtime. The map paths are
+    built in content space and cached per zoom level, so panning is just a
+    translate (no rebuild) and only zooming rebuilds them."""
+
+    __gtype_name__ = "EaselMapView"
+
+    _CLUSTER_CELL = 56.0   # px grid that merges nearby photos into one marker
+    _MARKER = 46.0         # thumbnail marker size (px)
+    _MIN_ZOOM = 1.0
+    _MAX_ZOOM = 48.0
+
+    def __init__(self):
+        super().__init__()
+        self._entries = []          # [(lon, lat, photo), …]
+        self._clusters = []         # cached clusters for the current view
+        self._cache_key = None
+        self._hover = -1
+        self._pointer = None
+        self._activate_cb = None
+        self._zoom = 1.0
+        self._cx = 0.5              # normalised viewport centre across longitude
+        self._cy = 0.5              # normalised viewport centre across latitude
+        self._drag_origin = None
+        self._zoom_start = 1.0
+        self._geo = None            # cached rings/lines from worldmap
+        self._cities = None         # cached (lon, lat, rank, name) list
+        self._path_key = None       # world size the paths were built for
+        self._land_path = None
+        self._lake_path = None
+        self._border_path = None
+        self._river_path = None
+        self._road_path = None
+        self._city_font_desc = None
+        self._thumbs = {}           # path -> cover thumbnail texture
+        self._thumb_pending = set()
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+
+        click = Gtk.GestureClick(button=1)
+        click.connect("released", self._on_click)
+        self.add_controller(click)
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        motion.connect("leave", self._on_leave)
+        self.add_controller(motion)
+        scroll = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL)
+        scroll.connect("scroll", self._on_scroll)
+        self.add_controller(scroll)
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        self.add_controller(drag)
+        zoom = Gtk.GestureZoom()
+        zoom.connect("begin", self._on_zoom_begin)
+        zoom.connect("scale-changed", self._on_zoom_scale)
+        self.add_controller(zoom)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_photos(self, entries):
+        """entries: an iterable of (lon, lat, photo) — photo is opaque to the
+        map and handed back to the activate callback on click."""
+        self._entries = list(entries)
+        self._cache_key = None
+        self.queue_draw()
+
+    def set_activate_cb(self, cb):
+        """cb(list_of_photos) is called when a pin is clicked."""
+        self._activate_cb = cb
+
+    # ---- projection ----
+
+    def _base_w(self):
+        """World width in px at zoom 1: the whole world, contained 2:1."""
+        w, h = self.get_width(), self.get_height()
+        return max(1.0, min(float(w), 2.0 * float(h)))
+
+    def _world_size(self):
+        ww = self._base_w() * self._zoom
+        return ww, ww / 2.0
+
+    def _project(self, lon, lat):
+        w, h = self.get_width(), self.get_height()
+        ww, wh = self._world_size()
+        u = (lon + 180.0) / 360.0
+        v = (90.0 - lat) / 180.0
+        return w / 2.0 + (u - self._cx) * ww, h / 2.0 + (v - self._cy) * wh
+
+    # ---- zoom / pan ----
+
+    def _clamp(self):
+        self._zoom = max(self._MIN_ZOOM, min(self._MAX_ZOOM, self._zoom))
+        self._cx = min(1.0, max(0.0, self._cx))
+        self._cy = min(1.0, max(0.0, self._cy))
+
+    def _zoom_at(self, factor, px, py):
+        """Zoom by `factor`, keeping the world point under (px, py) fixed."""
+        w, h = self.get_width(), self.get_height()
+        ww, wh = self._world_size()
+        u = self._cx + (px - w / 2.0) / ww
+        v = self._cy + (py - h / 2.0) / wh
+        self._zoom *= factor
+        self._clamp()
+        ww, wh = self._world_size()
+        self._cx = u - (px - w / 2.0) / ww
+        self._cy = v - (py - h / 2.0) / wh
+        self._clamp()
+        self._cache_key = None
+        self.queue_draw()
+
+    def _on_scroll(self, _ctrl, _dx, dy):
+        factor = (1.0 / 1.2) if dy > 0 else 1.2   # scroll up zooms in
+        px, py = self._pointer or (self.get_width() / 2.0, self.get_height() / 2.0)
+        self._zoom_at(factor, px, py)
+        return True
+
+    def _on_drag_begin(self, _g, _x, _y):
+        self._drag_origin = (self._cx, self._cy)
+
+    def _on_drag_update(self, _g, ox, oy):
+        if self._drag_origin is None:
+            return
+        ww, wh = self._world_size()
+        self._cx = self._drag_origin[0] - ox / ww
+        self._cy = self._drag_origin[1] - oy / wh
+        self._clamp()
+        self._cache_key = None
+        self.queue_draw()
+
+    def _on_zoom_begin(self, _g, _seq):
+        self._zoom_start = self._zoom
+
+    def _on_zoom_scale(self, gesture, scale):
+        ok, x, y = gesture.get_bounding_box_center()
+        px, py = (x, y) if ok else (self.get_width() / 2.0, self.get_height() / 2.0)
+        target = self._zoom_start * scale
+        if self._zoom > 0:
+            self._zoom_at(target / self._zoom, px, py)
+
+    # ---- clustering ----
+
+    def _ensure_clusters(self):
+        """Group photos into pins by screen distance for the current view.
+        Depends on zoom and centre, so photos re-cluster as you zoom — nearby
+        shots merge when zoomed out and separate as you zoom in."""
+        key = (self.get_width(), self.get_height(), round(self._zoom, 4),
+               round(self._cx, 5), round(self._cy, 5),
+               id(self._entries), len(self._entries))
+        if key == self._cache_key:
+            return
+        self._cache_key = key
+        clusters = []
+        w, h = self.get_width(), self.get_height()
+        if w > 0 and h > 0 and self._entries:
+            cell = self._CLUSTER_CELL
+            buckets = {}
+            for lon, lat, photo in self._entries:
+                px, py = self._project(lon, lat)
+                bkey = (int(px // cell), int(py // cell))
+                buckets.setdefault(bkey, []).append((px, py, photo))
+            for members in buckets.values():
+                cx = sum(m[0] for m in members) / len(members)
+                cy = sum(m[1] for m in members) / len(members)
+                clusters.append({
+                    "x": cx, "y": cy, "n": len(members),
+                    "photos": [m[2] for m in members],
+                })
+            clusters.sort(key=lambda c: c["n"])  # bigger pins drawn on top
+        self._clusters = clusters
+
+    # ---- interaction ----
+
+    def _hit(self, x, y):
+        self._ensure_clusters()
+        r = self._MARKER / 2.0 + 3.0   # square hit area matching the thumbnail
+        best = -1
+        for i, c in enumerate(self._clusters):
+            if abs(x - c["x"]) <= r and abs(y - c["y"]) <= r:
+                best = i  # later markers win ties — they're drawn on top
+        return best
+
+    def _on_click(self, _gesture, _n, x, y):
+        i = self._hit(x, y)
+        if i >= 0 and self._activate_cb is not None:
+            self._activate_cb(self._clusters[i]["photos"])
+
+    def _on_motion(self, _ctrl, x, y):
+        self._pointer = (x, y)
+        self._set_hover(self._hit(x, y))
+
+    def _on_leave(self, *_a):
+        self._pointer = None
+        self._set_hover(-1)
+
+    def _set_hover(self, i):
+        if i == self._hover:
+            return
+        self._hover = i
+        self.set_cursor(POINTER_CURSOR if i >= 0 else None)
+        self.queue_draw()
+
+    # ---- map geometry ----
+
+    def _load_geo(self):
+        if self._geo is None:
+            self._geo = (worldmap.land_rings(), worldmap.lake_rings(),
+                         worldmap.border_lines(), worldmap.river_lines(),
+                         worldmap.road_lines())
+            self._cities = worldmap.cities()
+        return self._geo
+
+    def _ensure_paths(self):
+        """Build the vector paths in *content* space (world pixels at the
+        current zoom, independent of pan) and cache them by world size, so
+        panning reuses them and only a zoom change rebuilds."""
+        ww, wh = self._world_size()
+        key = round(ww, 1)
+        if key == self._path_key:
+            return
+        self._path_key = key
+        land, lakes, borders, rivers, roads = self._load_geo()
+
+        def build(items, closed):
+            b = Gsk.PathBuilder()
+            for pts in items:
+                first = True
+                for lon, lat in pts:
+                    x = (lon + 180.0) / 360.0 * ww
+                    y = (90.0 - lat) / 180.0 * wh
+                    if first:
+                        b.move_to(x, y)
+                        first = False
+                    else:
+                        b.line_to(x, y)
+                if closed:
+                    b.close()
+            return b.to_path()
+
+        self._land_path = build(land, True)
+        self._lake_path = build(lakes, True)
+        self._border_path = build(borders, False)
+        self._river_path = build(rivers, False)
+        self._road_path = build(roads, False)
+
+    # ---- painting ----
+
+    @staticmethod
+    def _circle(snapshot, cx, cy, r, rgba):
+        rect = Graphene.Rect().init(cx - r, cy - r, 2 * r, 2 * r)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(rect, r)
+        snapshot.push_rounded_clip(rounded)
+        snapshot.append_color(rgba, rect)
+        snapshot.pop()
+
+    def do_snapshot(self, snapshot):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return
+
+        self._ensure_paths()
+        ww, wh = self._world_size()
+        off_x = self._cx * ww - w / 2.0   # content→screen: screen = content − off
+        off_y = self._cy * wh - h / 2.0
+
+        bounds = Graphene.Rect().init(0, 0, w, h)
+        snapshot.push_clip(bounds)
+        snapshot.append_color(_MAP_SEA, bounds)
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(-off_x, -off_y))
+        # Land fill (even-odd so island/lake rings punch holes), lakes painted
+        # back in the sea colour, then coastline + country borders stroked.
+        snapshot.append_fill(self._land_path, Gsk.FillRule.EVEN_ODD, _MAP_LAND)
+        snapshot.append_fill(self._lake_path, Gsk.FillRule.EVEN_ODD, _MAP_SEA)
+        # Roads first (faint, and only once zoomed past the world overview so
+        # they add local context without cluttering), then rivers, then the
+        # coastline and country borders on top.
+        if self._zoom >= 5.0:
+            snapshot.append_stroke(self._road_path, Gsk.Stroke.new(0.7), _MAP_ROAD)
+        snapshot.append_stroke(self._river_path, Gsk.Stroke.new(0.6), _MAP_RIVER)
+        snapshot.append_stroke(self._land_path, Gsk.Stroke.new(0.8), _MAP_COAST)
+        snapshot.append_stroke(self._border_path, Gsk.Stroke.new(0.6), _MAP_BORDER)
+        snapshot.restore()
+        snapshot.pop()  # bounds clip
+
+        # City dots and labels, revealed progressively as you zoom in.
+        self._draw_cities(snapshot, w, h)
+
+        # Photo-thumbnail markers (Apple Photos style).
+        self._ensure_clusters()
+        for i, c in enumerate(self._clusters):
+            cx, cy = c["x"], c["y"]
+            if cx < -60 or cx > w + 60 or cy < -60 or cy > h + 60:
+                continue  # off-screen after panning
+            self._draw_marker(snapshot, cx, cy, c, i == self._hover)
+
+    @staticmethod
+    def _round_rect(snapshot, x, y, w, h, radius, rgba):
+        rect = Graphene.Rect().init(x, y, w, h)
+        rr = Gsk.RoundedRect()
+        rr.init_from_rect(rect, radius)
+        snapshot.push_rounded_clip(rr)
+        snapshot.append_color(rgba, rect)
+        snapshot.pop()
+
+    def _marker_texture(self, path):
+        """The cover thumbnail texture for a marker, or None until it decodes.
+        Loads from the file cache (no glycin), so it works in the sandbox."""
+        tex = self._thumbs.get(path)
+        if tex is not None:
+            return tex
+        if path in self._thumb_pending:
+            return None
+        cached = request_thumbnail(path, 96,
+                                   wants=lambda p=path: p not in self._thumbs,
+                                   callback=self._on_thumb_ready)
+        if cached is not None:
+            self._thumbs[path] = cached
+            return cached
+        self._thumb_pending.add(path)
+        return None
+
+    def _on_thumb_ready(self, path, texture):
+        self._thumb_pending.discard(path)
+        if texture is not None:
+            self._thumbs[path] = texture
+            self.queue_draw()
+        return False
+
+    # Progressive reveal: a city's dot, and later its label, appear once you've
+    # zoomed past these levels, indexed by rank (0 = most major, capped at 4).
+    _CITY_DOT_ZOOM = (1.0, 1.0, 2.0, 4.0, 7.0)
+    _CITY_LABEL_ZOOM = (2.5, 2.5, 4.5, 7.0, 11.0)
+
+    def _city_font(self):
+        if self._city_font_desc is None:
+            fd = Pango.FontDescription()
+            fd.set_family("IBM Plex Sans")
+            fd.set_size(9 * Pango.SCALE)
+            self._city_font_desc = fd
+        return self._city_font_desc
+
+    def _draw_cities(self, snapshot, w, h):
+        self._load_geo()
+        if not self._cities:
+            return
+        zoom = self._zoom
+        last = len(self._CITY_DOT_ZOOM) - 1
+        for lon, lat, rank, name in self._cities:
+            r = min(rank, last)
+            if zoom < self._CITY_DOT_ZOOM[r]:
+                continue
+            px, py = self._project(lon, lat)
+            if px < -4 or px > w + 4 or py < -4 or py > h + 4:
+                continue
+            self._circle(snapshot, px, py, 3.0, _MAP_CITY_HALO)
+            self._circle(snapshot, px, py, 2.0, _MAP_CITY)
+            if zoom < self._CITY_LABEL_ZOOM[r]:
+                continue
+            layout = self.create_pango_layout(name)
+            layout.set_font_description(self._city_font())
+            try:
+                _ink, logical = layout.get_pixel_extents()
+                th = logical.height
+            except Exception:
+                th = 10
+            lx, ly = px + 5.0, py - th / 2.0
+            # A 1px light halo makes the label legible over the green land.
+            snapshot.save()
+            snapshot.translate(Graphene.Point().init(lx + 0.7, ly + 0.7))
+            snapshot.append_layout(layout, _MAP_CITY_HALO)
+            snapshot.restore()
+            snapshot.save()
+            snapshot.translate(Graphene.Point().init(lx, ly))
+            snapshot.append_layout(layout, _MAP_LABEL)
+            snapshot.restore()
+
+    def _draw_marker(self, snapshot, cx, cy, cluster, hover):
+        size = self._MARKER + (6.0 if hover else 0.0)
+        half = size / 2.0
+        # White rounded frame behind the photo.
+        self._round_rect(snapshot, cx - half - 1.5, cy - half - 1.5,
+                         size + 3.0, size + 3.0, 8.0, _WHITE)
+        inner = Graphene.Rect().init(cx - half, cy - half, size, size)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(inner, 6.0)
+        snapshot.push_rounded_clip(rounded)
+        tex = self._marker_texture(cluster["photos"][0].path)
+        tw = tex.get_width() if tex is not None else 0
+        th = tex.get_height() if tex is not None else 0
+        if tex is not None and tw > 0 and th > 0:
+            scale = max(size / tw, size / th)   # cover-fit, centre-cropped
+            dw, dh = tw * scale, th * scale
+            snapshot.append_texture(
+                tex, Graphene.Rect().init(cx - dw / 2.0, cy - dh / 2.0, dw, dh))
+        else:
+            snapshot.append_color(_PIN, inner)  # placeholder until decoded
+        snapshot.pop()
+        n = cluster["n"]
+        if n > 1:
+            self._draw_badge(snapshot, cx + half, cy - half, n)
+
+    def _draw_badge(self, snapshot, x, y, n):
+        """A small accent count pill anchored at the marker's top-right (x, y)."""
+        label = str(n) if n < 1000 else "999+"
+        layout = self.create_pango_layout(label)
+        try:
+            _ink, logical = layout.get_pixel_extents()
+            tw, th = logical.width, logical.height
+        except Exception:
+            tw, th = 10, 10
+        bh = th + 2.0
+        bw = max(bh, tw + 8.0)
+        bx, by = x - bw + 4.0, y - 4.0
+        self._round_rect(snapshot, bx, by, bw, bh, bh / 2.0, _PIN)
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(bx + (bw - tw) / 2.0,
+                                                  by + (bh - th) / 2.0))
+        snapshot.append_layout(layout, _WHITE)
+        snapshot.restore()
+
+
+class FacePinLayer(Gtk.Widget):
+    """A transparent overlay drawn on top of the info-panel photo preview. It
+    shows a small pin for each person tagged in the photo, and turns a click on
+    the photo into a normalised (x, y) so the user can drop a new tag exactly
+    where that person is ("pin and type a name").
+
+    Like CropOverlay it's an overlay child that paints its own content in
+    do_snapshot — the drawing path that reliably paints in this runtime."""
+
+    __gtype_name__ = "EaselFacePinLayer"
+
+    _DOT_R = 6.0
+
+    def __init__(self):
+        super().__init__()
+        self._faces = []       # [(name, x, y), …] normalised pin positions
+        self._place_cb = None
+        self.set_cursor(POINTER_CURSOR)
+        click = Gtk.GestureClick(button=1)
+        click.connect("released", self._on_click)
+        self.add_controller(click)
+        # Hovering a pin names the person it marks.
+        self.set_has_tooltip(True)
+        self.connect("query-tooltip", self._on_query_tooltip)
+
+    def do_measure(self, orientation, for_size):
+        return (0, 0, -1, -1)
+
+    def set_faces(self, faces):
+        """faces: iterable of (name, x, y) — name labels the pin on hover."""
+        self._faces = [(str(name), float(x), float(y)) for name, x, y in faces]
+        self.queue_draw()
+
+    def set_place_cb(self, cb):
+        """cb(nx, ny, px, py) fires when the photo is clicked: nx/ny are
+        normalised, px/py are widget pixels (to anchor a popover)."""
+        self._place_cb = cb
+
+    def _on_click(self, _gesture, _n, x, y):
+        w, h = self.get_width(), self.get_height()
+        if w > 0 and h > 0 and self._place_cb is not None:
+            self._place_cb(x / w, y / h, x, y)
+
+    def _on_query_tooltip(self, _widget, x, y, _keyboard, tooltip):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return False
+        hit = self._DOT_R + 3.0
+        for name, nx, ny in self._faces:
+            cx, cy = nx * w, ny * h
+            if (x - cx) ** 2 + (y - cy) ** 2 <= hit * hit:
+                tooltip.set_text(name)
+                return True
+        return False
+
+    def do_snapshot(self, snapshot):
+        w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return
+        r = self._DOT_R
+        for _name, nx, ny in self._faces:
+            cx, cy = nx * w, ny * h
+            MapView._circle(snapshot, cx, cy, r + 2.0, _WHITE)
+            MapView._circle(snapshot, cx, cy, r, _PIN)
