@@ -27,7 +27,7 @@ from . import library as lib
 from .models import Album, Person, Photo
 from .widgets import (AdjustableImage, AdjustScale, CropOverlay, FacePinLayer,
                       FilterThumb, MapView, Swatch, load_full_texture,
-                      render_adjusted_texture)
+                      render_adjusted_texture, suspend_video_thumbnails)
 
 APP_ID = "io.github.drvonmiau.Easel"
 
@@ -2166,6 +2166,7 @@ class EaselWindow(Adw.ApplicationWindow):
     def _stop_lightbox_video(self):
         """Stop and release any playing video so audio doesn't keep going after
         navigating or closing."""
+        suspend_video_thumbnails(False)  # let background frame-grabbing resume
         try:
             stream = self.lightbox_video.get_media_stream()
             if stream is not None:
@@ -2189,6 +2190,9 @@ class EaselWindow(Adw.ApplicationWindow):
             self.lightbox_picture.set_visible(False)
             self.lightbox_picture.set_paintable(None)
             self.lightbox_video.set_visible(True)
+            # Pause background video-thumbnail decoding so it doesn't steal CPU
+            # from playback (resumed when the video stops / lightbox closes).
+            suspend_video_thumbnails(True)
             try:
                 self.lightbox_video.set_file(Gio.File.new_for_path(photo.path))
             except Exception:

@@ -9,6 +9,7 @@ import hashlib
 import math
 import os
 import sys
+import threading
 import time
 from collections import OrderedDict
 
@@ -185,6 +186,11 @@ def _decode_scaled(path, size, rotation=0):
 
 def _process_load_stack():
     global _load_idle_id
+    if not _video_gate.is_set():
+        # A video is playing — stop decoding on the main thread so it doesn't
+        # stutter playback. Re-kicked by suspend_video_thumbnails(False).
+        _load_idle_id = 0
+        return False
     start = time.monotonic()
     while _load_stack:
         path, size, rotation, key, wants, callback = _load_stack.pop()  # LIFO
@@ -240,6 +246,22 @@ _VIDEO_EXT = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv",
               ".3gp", ".mpg", ".mpeg", ".ogv", ".ts", ".mts"}
 _video_pool = None
 _video_inflight = set()
+# One worker (video decode is expensive), and a gate that pauses background
+# frame-grabbing while a video is actually playing so it doesn't fight the
+# player for CPU — software decoding in the sandbox has no headroom to share.
+_video_gate = threading.Event()
+_video_gate.set()
+
+
+def suspend_video_thumbnails(suspend):
+    global _load_idle_id
+    if suspend:
+        _video_gate.clear()
+    else:
+        _video_gate.set()
+        # Resume any paused main-thread thumbnail decoding.
+        if _load_stack and not _load_idle_id:
+            _load_idle_id = GLib.idle_add(_process_load_stack)
 
 
 def _is_video(path):
@@ -272,9 +294,13 @@ def _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback):
     _video_inflight.add(path)
     if _video_pool is None:
         import concurrent.futures
-        _video_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        _video_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     def work():
+        # Wait here while a video is playing (gate cleared), so the frame-grab
+        # doesn't compete with the player; the timeout keeps it from stalling
+        # forever if a resume is somehow missed.
+        _video_gate.wait(timeout=30)
         # Only the GStreamer decode/seek (bounded, its own threads) runs here.
         try:
             frame = _extract_video_frame(path)
