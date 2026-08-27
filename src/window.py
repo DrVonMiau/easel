@@ -144,7 +144,10 @@ class EaselWindow(Adw.ApplicationWindow):
 
     detail_back_row = Gtk.Template.Child()
     back_btn = Gtk.Template.Child()
+    detail_title_label = Gtk.Template.Child()
+    detail_title_stats = Gtk.Template.Child()
     detail_kind_label = Gtk.Template.Child()
+    detail_header = Gtk.Template.Child()
     detail_hero_slot = Gtk.Template.Child()
     detail_name_label = Gtk.Template.Child()
     detail_stats_label = Gtk.Template.Child()
@@ -2587,16 +2590,14 @@ class EaselWindow(Adw.ApplicationWindow):
             self._detail_photos = photos
             self._render_subfolders(subfolders)
             self.detail_kind_label.set_label(kind_label)
-            self._clear_box(self.detail_hero_slot)
-            hero = Swatch("album", size=108)
-            hero.set_path(cover)
-            self.detail_hero_slot.append(hero)
-            self.detail_name_label.set_label(title)
             parts = [f"{total} photo{'s' if total != 1 else ''}"]
             if subfolders:
                 k = len(subfolders)
                 parts.append(f"{k} folder{'s' if k != 1 else ''}")
-            self.detail_stats_label.set_label(" · ".join(parts))
+            # Folders show a compact title beside the Back button and hide the
+            # hero/name header, so the whole grid gets the paper's full height.
+            self._set_detail_header(inline=True, title=title,
+                                    stats=" · ".join(parts))
             self._fill_store(self.detail_store, self._detail_photos)
             self._schedule_resize_tiles()
             return
@@ -2616,21 +2617,39 @@ class EaselWindow(Adw.ApplicationWindow):
 
         self._render_subfolders(subfolders)  # empty for non-folder detail: hides it
         self.detail_kind_label.set_label(kind_label)
-        self._clear_box(self.detail_hero_slot)
-        hero = Swatch(kind_label.lower(), size=108)
-        hero.set_path(cover)
-        self.detail_hero_slot.append(hero)
-        self.detail_name_label.set_label(title)
-
         count = len(photos)
         parts = [f"{count} photo{'s' if count != 1 else ''}"]
         if date:
             parts.append(date)
-        self.detail_stats_label.set_label(" · ".join(parts))
+        self._set_detail_header(inline=False, title=title,
+                                stats=" · ".join(parts), cover=cover,
+                                kind=kind_label)
 
         self._detail_photos = photos
         self._fill_store(self.detail_store, self._detail_photos)
         self._schedule_resize_tiles()
+
+    def _set_detail_header(self, inline, title, stats, cover=None, kind="album"):
+        """The detail header has two modes. Folders use a compact title beside
+        the Back button with the hero/name block hidden, so the sub-folders and
+        photos get the paper's full height. Albums, people and specials use the
+        hero + big-name block below the Back row."""
+        if inline:
+            self.detail_header.set_visible(False)
+            self.detail_title_label.set_label(title)
+            self.detail_title_stats.set_label(stats)
+            self.detail_title_label.set_visible(True)
+            self.detail_title_stats.set_visible(bool(stats))
+        else:
+            self.detail_title_label.set_visible(False)
+            self.detail_title_stats.set_visible(False)
+            self.detail_header.set_visible(True)
+            self._clear_box(self.detail_hero_slot)
+            hero = Swatch(kind.lower(), size=108)
+            hero.set_path(cover)
+            self.detail_hero_slot.append(hero)
+            self.detail_name_label.set_label(title)
+            self.detail_stats_label.set_label(stats)
 
     @staticmethod
     def _folder_card(node):

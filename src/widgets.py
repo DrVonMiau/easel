@@ -47,8 +47,12 @@ STRIPE_WIDTH = 2.4
 # the main thread (a background thread just yields blank images), so we can't
 # use a worker pool. Idle-batching keeps it non-blocking and bounded instead.
 # Keyed by (path, size, rotation, mtime) so edits/size/rotation changes reload.
+# Sized so a whole large folder (a few hundred photos) stays resident: at 320 a
+# folder like a full trip's worth of shots couldn't all fit, so scrolling back
+# up re-decoded from the top every time. The decoded dimension is capped
+# (_THUMB_MAX_DIM) so the memory stays bounded even at this count.
 _THUMB_CACHE = OrderedDict()
-_THUMB_CACHE_MAX = 320
+_THUMB_CACHE_MAX = 600
 # Cap the decoded dimension regardless of requested swatch size (retina
 # headroom without unbounded memory).
 _THUMB_MAX_DIM = 512
@@ -189,20 +193,22 @@ def _load_scaled(path, size, rotation=0):
         except Exception as exc:
             _log_load_failure(path, exc)
             return None, False
-    # Costly path: decode the original and bake the cache PNG.
+    # Costly path: decode the original and scale it down.
     try:
         src = Gdk.Texture.new_from_filename(path)
     except Exception as exc:
         _log_load_failure(path, exc)
         return None, True
     scaled = _render_texture(src, rotation, max_dim=dim)
-    if scaled is None or not _texture_to_cache(scaled, cache_file):
+    if scaled is None:
         return None, True
-    try:
-        return Gdk.Texture.new_from_filename(cache_file), True
-    except Exception as exc:
-        _log_load_failure(path, exc)
-        return None, True
+    # Bake the PNG so the next visit takes the cheap path, but paint the
+    # in-memory scaled texture we already have rather than re-decoding the file
+    # we just wrote — that PNG encode + reload was pure latency on the critical
+    # path of a folder's first load. Caching is best-effort: a failed write just
+    # means the next visit re-decodes, so the thumbnail still shows now.
+    _texture_to_cache(scaled, cache_file)
+    return scaled, True
 
 
 def _process_load_stack():

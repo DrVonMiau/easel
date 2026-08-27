@@ -272,14 +272,46 @@
                     <property name="margin-start">24</property>
                     <property name="margin-end">24</property>
                     <property name="start-widget">
-                      <object class="GtkButton" id="back_btn">
-                        <style>
-                          <class name="back-btn"/>
-                        </style>
+                      <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">16</property>
+                        <property name="valign">center</property>
                         <child>
-                          <object class="AdwButtonContent">
-                            <property name="icon-name">easel-arrow-left-symbolic</property>
-                            <property name="label" translatable="yes">Back</property>
+                          <object class="GtkButton" id="back_btn">
+                            <property name="valign">center</property>
+                            <style>
+                              <class name="back-btn"/>
+                            </style>
+                            <child>
+                              <object class="AdwButtonContent">
+                                <property name="icon-name">easel-arrow-left-symbolic</property>
+                                <property name="label" translatable="yes">Back</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <!-- Compact title beside Back, used by folder detail
+                             (the hero/name header is hidden then). -->
+                        <child>
+                          <object class="GtkLabel" id="detail_title_label">
+                            <property name="visible">false</property>
+                            <property name="xalign">0</property>
+                            <property name="valign">center</property>
+                            <property name="ellipsize">end</property>
+                            <property name="max-width-chars">28</property>
+                            <style>
+                              <class name="detail-title"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkLabel" id="detail_title_stats">
+                            <property name="visible">false</property>
+                            <property name="xalign">0</property>
+                            <property name="valign">baseline</property>
+                            <style>
+                              <class name="mono-dim"/>
+                            </style>
                           </object>
                         </child>
                       </object>
@@ -528,7 +560,7 @@
                                  decode work stays bounded. The whole-library grid
                                  (photo_grid) keeps its direct-child virtualisation. -->
                             <child>
-                              <object class="GtkBox">
+                              <object class="GtkBox" id="detail_header">
                                 <property name="orientation">horizontal</property>
                                 <property name="spacing">24</property>
                                 <property name="margin-top">24</property>
