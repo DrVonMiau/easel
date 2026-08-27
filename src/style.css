@@ -275,6 +275,15 @@ gridview.card-grid > child:focus {
   letter-spacing: -0.01em;
 }
 
+/* Compact detail title shown beside the Back button (folder view). */
+.detail-title {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 19px;
+  font-weight: 600;
+  color: @window_fg_color;
+  letter-spacing: -0.01em;
+}
+
 /* Year separator heading in the Months view. */
 .year-header {
   font-family: "IBM Plex Sans", sans-serif;
