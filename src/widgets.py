@@ -80,7 +80,16 @@ _load_idle_id = 0
 # clock. A time budget (rather than a fixed count) fills the visible grid as
 # fast as each machine allows while keeping scrolling smooth — a fixed small
 # count left fast machines needlessly slow and slow ones still janky.
-_LOAD_BUDGET = 0.010
+#
+# Two budgets: generating a thumbnail from the original is costly (a full-res
+# decode + GSK scale), so those yield after a tight budget to protect the frame
+# clock. Loading an already-baked thumbnail off the disk cache is cheap, so a
+# cycle that only does cheap loads keeps going up to a larger budget — this is
+# what makes revisited folders (and every folder in a second session, where the
+# disk cache is warm) fill their thumbnails in one or two cycles instead of
+# trickling in a few per frame.
+_LOAD_BUDGET = 0.010       # costly original-decode budget per idle cycle
+_FAST_BUDGET = 0.024       # cheap baked-thumbnail loads fill faster per cycle
 
 def _render_texture(texture, rotation=0, max_dim=None):
     """Return a new Gdk.Texture that is `texture` optionally rotated by a
@@ -153,9 +162,14 @@ def _cache_put(key, texture):
         _THUMB_CACHE.popitem(last=False)
 
 
-def _decode_scaled(path, size, rotation=0):
-    """Decode `path` scaled to ~`size` (with any rotation baked in) and return a
-    renderable Gdk.Texture, or None if it can't be loaded.
+def _load_scaled(path, size, rotation=0):
+    """Get a renderable Gdk.Texture for `path` scaled to ~`size` (with any
+    rotation baked in). Returns (texture, expensive):
+      * texture   — the thumbnail, or None if it can't be loaded.
+      * expensive — True when it had to be generated from the original (a costly
+                    full-res decode + GSK scale); False when it came straight off
+                    the on-disk baked cache (cheap). The loader uses this to
+                    budget cheap and costly work differently.
 
     The source is decoded with Gdk.Texture.new_from_filename (the only decode
     path that works in the GNOME 49 runtime — gdk-pixbuf's glycin subprocess
@@ -166,22 +180,29 @@ def _decode_scaled(path, size, rotation=0):
     try:
         mtime = os.path.getmtime(path)
     except OSError:
-        return None
+        return None, False
     cache_file = _thumb_cache_file(path, dim, rotation, mtime)
-    if not os.path.exists(cache_file):
+    if os.path.exists(cache_file):
+        # Cheap path: the thumbnail is already baked; just load it.
         try:
-            src = Gdk.Texture.new_from_filename(path)
+            return Gdk.Texture.new_from_filename(cache_file), False
         except Exception as exc:
             _log_load_failure(path, exc)
-            return None
-        scaled = _render_texture(src, rotation, max_dim=dim)
-        if scaled is None or not _texture_to_cache(scaled, cache_file):
-            return None
+            return None, False
+    # Costly path: decode the original and bake the cache PNG.
     try:
-        return Gdk.Texture.new_from_filename(cache_file)
+        src = Gdk.Texture.new_from_filename(path)
     except Exception as exc:
         _log_load_failure(path, exc)
-        return None
+        return None, True
+    scaled = _render_texture(src, rotation, max_dim=dim)
+    if scaled is None or not _texture_to_cache(scaled, cache_file):
+        return None, True
+    try:
+        return Gdk.Texture.new_from_filename(cache_file), True
+    except Exception as exc:
+        _log_load_failure(path, exc)
+        return None, True
 
 
 def _process_load_stack():
@@ -199,14 +220,18 @@ def _process_load_stack():
         if wants is not None and not wants():
             continue
         texture = _cache_get(key)
+        expensive = False
         if texture is None:
-            texture = _decode_scaled(path, size, rotation)
+            texture, expensive = _load_scaled(path, size, rotation)
             if texture is not None:
                 _cache_put(key, texture)
         callback(path, texture)
-        # At least one decode runs per cycle; stop once the budget is spent so
-        # the frame clock gets a turn.
-        if time.monotonic() - start >= _LOAD_BUDGET:
+        # At least one item runs per cycle. A costly original decode yields
+        # quickly (tight budget) so scrolling stays smooth; a cycle spent only
+        # on cheap baked-thumbnail loads keeps going up to the larger budget so
+        # a warm-cache grid fills in one or two cycles.
+        elapsed = time.monotonic() - start
+        if elapsed >= _FAST_BUDGET or (expensive and elapsed >= _LOAD_BUDGET):
             break
     if _load_stack:
         return True  # keep the idle handler running
@@ -434,7 +459,7 @@ def load_thumbnail(path, size):
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    texture = _decode_scaled(path, size)
+    texture, _expensive = _load_scaled(path, size)
     if texture is None:
         texture = load_full_texture(path)
     if texture is not None:
