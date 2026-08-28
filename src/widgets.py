@@ -46,16 +46,33 @@ STRIPE_WIDTH = 2.4
 # runtime image decoding goes through glycin subprocesses that only work from
 # the main thread (a background thread just yields blank images), so we can't
 # use a worker pool. Idle-batching keeps it non-blocking and bounded instead.
-# Keyed by (path, size, rotation, mtime) so edits/size/rotation changes reload.
+# Keyed by (path, dim, rotation, mtime) — dim is a bucketed decode size (see
+# _thumb_dim), so edits/rotation changes reload but nearby display sizes reuse
+# one decode instead of re-decoding on every resize.
 # Sized so a whole large folder (a few hundred photos) stays resident: at 320 a
 # folder like a full trip's worth of shots couldn't all fit, so scrolling back
 # up re-decoded from the top every time. The decoded dimension is capped
 # (_THUMB_MAX_DIM) so the memory stays bounded even at this count.
 _THUMB_CACHE = OrderedDict()
 _THUMB_CACHE_MAX = 600
-# Cap the decoded dimension regardless of requested swatch size (retina
-# headroom without unbounded memory).
-_THUMB_MAX_DIM = 512
+# Cap the decoded dimension regardless of requested swatch size. 384 keeps grid
+# tiles and the info-panel preview crisp (all display ≲320px) while decoding
+# noticeably faster and holding a smaller disk/RAM cache than the old 512 — the
+# "reduce the quality so it loads faster" trade. The full-window lightbox loads
+# the original separately (load_full_texture), so it is unaffected.
+_THUMB_MAX_DIM = 384
+
+
+def _thumb_dim(size):
+    """The decode dimension for a swatch that displays at `size` px. Decoded at
+    ~2x for retina sharpness, capped at _THUMB_MAX_DIM, and SNAPPED to a coarse
+    ladder so nearby display sizes — a window resize, a thumb-slider nudge, the
+    info panel sliding in — all resolve to the SAME cached texture instead of
+    forcing a fresh decode and a new on-disk file for every stray pixel. This is
+    what lets a thumbnail, once loaded, stay loaded across those changes."""
+    want = min(max(int(size), 1) * 2, _THUMB_MAX_DIM)
+    step = 64
+    return min(_THUMB_MAX_DIM, ((want + step - 1) // step) * step)
 
 
 def _thumb_cache_dir():
@@ -166,9 +183,9 @@ def _cache_put(key, texture):
         _THUMB_CACHE.popitem(last=False)
 
 
-def _load_scaled(path, size, rotation=0):
-    """Get a renderable Gdk.Texture for `path` scaled to ~`size` (with any
-    rotation baked in). Returns (texture, expensive):
+def _load_scaled(path, dim, rotation=0):
+    """Get a renderable Gdk.Texture for `path` scaled so its longest side is
+    `dim` px (with any rotation baked in). Returns (texture, expensive):
       * texture   — the thumbnail, or None if it can't be loaded.
       * expensive — True when it had to be generated from the original (a costly
                     full-res decode + GSK scale); False when it came straight off
@@ -180,7 +197,6 @@ def _load_scaled(path, size, rotation=0):
     fails there), scaled/rotated via GSK, and the result is cached to a small
     PNG on disk. That PNG is then loaded back with new_from_filename so what the
     grid paints is always a plain file-backed texture."""
-    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -220,7 +236,7 @@ def _process_load_stack():
         return False
     start = time.monotonic()
     while _load_stack:
-        path, size, rotation, key, wants, callback = _load_stack.pop()  # LIFO
+        path, dim, rotation, key, wants, callback = _load_stack.pop()  # LIFO
         # Skip work the caller no longer wants (tile recycled / scrolled away)
         # so a big backlog never forces thousands of pointless decodes.
         if wants is not None and not wants():
@@ -228,7 +244,7 @@ def _process_load_stack():
         texture = _cache_get(key)
         expensive = False
         if texture is None:
-            texture, expensive = _load_scaled(path, size, rotation)
+            texture, expensive = _load_scaled(path, dim, rotation)
             if texture is not None:
                 _cache_put(key, texture)
         callback(path, texture)
@@ -258,16 +274,20 @@ def request_thumbnail(path, size, wants, callback, rotation=0):
         mtime = os.path.getmtime(path)
     except OSError:
         return None
-    key = (path, size, rotation, mtime)
+    # Key on the bucketed decode dimension, not the raw display size, so every
+    # display size that resolves to the same bucket shares one decode and one
+    # cached texture (a thumbnail stays loaded across resizes / slider nudges).
+    dim = _thumb_dim(size)
+    key = (path, dim, rotation, mtime)
     cached = _cache_get(key)
     if cached is not None:
         return cached
     if _is_video(path):
         # Videos can't be decoded as images; a frame is grabbed with GStreamer
         # off the main thread and cached, then loaded like any other thumbnail.
-        _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback)
+        _request_video_thumbnail(path, dim, rotation, mtime, key, wants, callback)
         return None
-    _load_stack.append((path, size, rotation, key, wants, callback))
+    _load_stack.append((path, dim, rotation, key, wants, callback))
     if not _load_idle_id:
         _load_idle_id = GLib.idle_add(_process_load_stack)
     return None
@@ -306,12 +326,12 @@ def _load_cache_texture(cache_file):
         return None
 
 
-def _request_video_thumbnail(path, size, rotation, mtime, key, wants, callback):
+def _request_video_thumbnail(path, dim, rotation, mtime, key, wants, callback):
     """Serve a video's poster frame: from the PNG cache if present, else bake it
     on a small background pool (GStreamer + GSK scale, both thread-safe) and
-    deliver it on the main thread. Any failure leaves the placeholder."""
+    deliver it on the main thread. Any failure leaves the placeholder. `dim` is
+    the bucketed decode dimension (see _thumb_dim)."""
     global _video_pool
-    dim = min(max(int(size) * 2, int(size)), _THUMB_MAX_DIM)
     cache_file = _thumb_cache_file(path, dim, rotation, mtime)
     if os.path.exists(cache_file):
         tex = _load_cache_texture(cache_file)
@@ -461,11 +481,12 @@ def load_thumbnail(path, size):
         mtime = os.path.getmtime(path)
     except OSError:
         return None
-    key = (path, size, mtime)
+    dim = _thumb_dim(size)
+    key = (path, dim, mtime)
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    texture, _expensive = _load_scaled(path, size)
+    texture, _expensive = _load_scaled(path, dim)
     if texture is None:
         texture = load_full_texture(path)
     if texture is not None:

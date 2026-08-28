@@ -542,23 +542,18 @@
                           <object class="GtkBox" id="detail_box">
                             <property name="orientation">vertical</property>
 
-                            <!-- Only the folder's title/hero header stays fixed;
-                                 the sub-folders and photos share ONE scroller and
-                                 scroll together, so the whole content moves rather
-                                 than the sub-folders pinning to the top and only
-                                 the photos (half the paper) scrolling.
-
-                                 The two grids sit in a vertical box inside the
-                                 scroller (both valign=start so a short folder never
-                                 stretches its rows to fill leftover height). This
-                                 means the photos grid isn't the scroller's direct
-                                 child, so it realises every tile rather than
-                                 virtualising — an accepted trade-off here because a
-                                 folder that HAS sub-folders is a container node that
-                                 holds few loose photos, and the thumbnail loader is
-                                 idle-batched and skips off-screen tiles, so the
-                                 decode work stays bounded. The whole-library grid
-                                 (photo_grid) keeps its direct-child virtualisation. -->
+                            <!-- The header and the sub-folder cards stay fixed;
+                                 only the photos grid scrolls, as the DIRECT child
+                                 of its own GtkScrolledWindow — exactly like the All
+                                 Photos grid. A scroll-managed GtkGridView takes its
+                                 natural height when short (rows tight at the top)
+                                 and virtualises when long; nested in a plain box
+                                 instead it spread its rows to fill leftover height
+                                 (big blank bands in folders with few loose photos)
+                                 and realised every tile at once (slow first paint
+                                 in large folders). Sub-folders are a single strip
+                                 of cards, so pinning them above the scroller reads
+                                 fine and keeps the photos grid scroll-managed. -->
                             <child>
                               <object class="GtkBox" id="detail_header">
                                 <property name="orientation">horizontal</property>
@@ -597,6 +592,22 @@
                             </child>
 
                             <child>
+                              <object class="EaselGridView" id="detail_folders_grid">
+                                <property name="visible">false</property>
+                                <property name="min-columns">2</property>
+                                <property name="max-columns">8</property>
+                                <property name="margin-top">16</property>
+                                <property name="margin-start">24</property>
+                                <property name="margin-end">24</property>
+                                <property name="valign">start</property>
+                                <property name="vexpand">false</property>
+                                <style>
+                                  <class name="card-grid"/>
+                                </style>
+                              </object>
+                            </child>
+
+                            <child>
                               <object class="GtkScrolledWindow">
                                 <property name="hscrollbar-policy">never</property>
                                 <property name="vexpand">true</property>
@@ -604,39 +615,16 @@
                                   <class name="om-scroll"/>
                                 </style>
                                 <property name="child">
-                                  <object class="GtkBox">
-                                    <property name="orientation">vertical</property>
-                                    <property name="valign">start</property>
-                                    <child>
-                                      <object class="EaselGridView" id="detail_folders_grid">
-                                        <property name="visible">false</property>
-                                        <property name="min-columns">2</property>
-                                        <property name="max-columns">8</property>
-                                        <property name="margin-top">16</property>
-                                        <property name="margin-start">24</property>
-                                        <property name="margin-end">24</property>
-                                        <property name="valign">start</property>
-                                        <property name="vexpand">false</property>
-                                        <style>
-                                          <class name="card-grid"/>
-                                        </style>
-                                      </object>
-                                    </child>
-                                    <child>
-                                      <object class="EaselGridView" id="detail_photos_grid">
-                                        <property name="min-columns">2</property>
-                                        <property name="max-columns">12</property>
-                                        <property name="margin-top">24</property>
-                                        <property name="margin-bottom">1</property>
-                                        <property name="margin-start">24</property>
-                                        <property name="margin-end">24</property>
-                                        <property name="valign">start</property>
-                                        <property name="vexpand">false</property>
-                                        <style>
-                                          <class name="card-grid"/>
-                                        </style>
-                                      </object>
-                                    </child>
+                                  <object class="EaselGridView" id="detail_photos_grid">
+                                    <property name="min-columns">2</property>
+                                    <property name="max-columns">12</property>
+                                    <property name="margin-top">24</property>
+                                    <property name="margin-bottom">1</property>
+                                    <property name="margin-start">24</property>
+                                    <property name="margin-end">24</property>
+                                    <style>
+                                      <class name="card-grid"/>
+                                    </style>
                                   </object>
                                 </property>
                               </object>
