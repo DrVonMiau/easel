@@ -31,6 +31,20 @@
 	<url type="homepage">https://github.com/DrVonMiau/easel</url>
 	<url type="bugtracker">https://github.com/DrVonMiau/easel/issues</url>
 	<url type="vcs-browser">https://github.com/DrVonMiau/easel</url>
+	<screenshots>
+		<screenshot type="default">
+			<image>https://raw.githubusercontent.com/DrVonMiau/easel/main/data/screenshots/gallery.png</image>
+			<caption>Every photo on a clean paper card</caption>
+		</screenshot>
+		<screenshot>
+			<image>https://raw.githubusercontent.com/DrVonMiau/easel/main/data/screenshots/details.png</image>
+			<caption>A photo with its details panel</caption>
+		</screenshot>
+		<screenshot>
+			<image>https://raw.githubusercontent.com/DrVonMiau/easel/main/data/screenshots/editor.png</image>
+			<caption>The non-destructive editor</caption>
+		</screenshot>
+	</screenshots>
 	<requires>
 		<display_length compare="ge">768</display_length>
 	</requires>
@@ -39,6 +53,17 @@
 		<control>pointing</control>
 	</supports>
 	<releases>
+		<release version="1.0.0" date="2026-08-31">
+			<description>
+				<p>Easel reaches 1.0 — its first stable release.</p>
+				<ul>
+					<li>Consistent grids and spacing across every view, with square tiles that line up</li>
+					<li>Thumbnails load once and stay put; steadier scrolling in large folders</li>
+					<li>Window chrome now follows your system icon theme</li>
+					<li>Refreshed screenshots and documentation</li>
+				</ul>
+			</description>
+		</release>
 		<release version="0.4.0" date="2026-08-09">
 			<description>
 				<p>Folders, and a calmer, faster library.</p>
