@@ -6,21 +6,30 @@
 	<name>Easel</name>
 	<summary>Browse your local photos</summary>
 	<developer id="io.github.drvonmiau">
-		<name>Daniel</name>
+		<name>Dr. von Miau</name>
 	</developer>
 	<description>
 	  <p>
 	    Easel is a calm, focused gallery for the photos you already have on
-	    disk. Browse everything at once or by album, keep favourites, and open
-	    any picture full-screen — all without an account or a cloud service.
+	    disk. Browse everything at once or by folder, album, person or place,
+	    and open any picture full-window — all without an account or a cloud service.
 	  </p>
 	  <p>Features:</p>
 	  <ul>
-	    <li>A clean grid of every photo, or grouped into albums by folder</li>
-	    <li>A full-window lightbox with left/right navigation</li>
-	    <li>Favourites, kept apart in their own view</li>
-	    <li>Folder watching, light and dark themes</li>
+	    <li>Every photo at once, or by folder, album, person or place</li>
+	    <li>A full-window lightbox with left/right and keyboard navigation</li>
+	    <li>Adjustments, filters, crop, rotate and flip, saved as a new copy that keeps the original's EXIF data</li>
+	    <li>HEIC and video support, with video thumbnails</li>
+	    <li>An offline world map that places photos by their GPS location</li>
+	    <li>Folder watching, favourites, light and dark themes</li>
 	  </ul>
+	  <p>
+	    Easel has read-only access to your home folder so it can show
+	    photos wherever you keep them, including network shares and phones
+	    mounted in Files, and it reads your system's icon theme so its
+	    buttons match your desktop. It has no network access, and saves
+	    edits as new copies through your desktop's file dialog.
+	  </p>
 	</description>
 	<launchable type="desktop-id">io.github.drvonmiau.Easel.desktop</launchable>
 	<content_rating type="oars-1.1"/>

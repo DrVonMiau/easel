@@ -1,25 +1,20 @@
 name: Flatpak repository (GitHub Pages)
 
-# Builds a hosted Flatpak repository and publishes it to GitHub Pages, so users
-# can add it once as a remote and then get AUTOMATIC UPDATES like any store app.
+# Builds a signed Flatpak repository and publishes it to GitHub Pages, so users
+# add it once and then get updates through GNOME Software / `flatpak update`.
 #
-# This is scaffolded but MANUAL-ONLY for now (workflow_dispatch). To turn it on:
+# Runs when a release is published (and by hand from the Actions tab), so only
+# released versions reach users — not every commit to main.
 #
-#   1. Repo Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
-#   2. (Recommended) Sign the repo so users don't need --no-gpg-verify:
-#        - generate a key:   gpg --quick-gen-key "Easel <you@example.com>"
-#        - export public:    gpg --armor --export <KEYID> > key.gpg   (ship this)
-#        - export private:   gpg --armor --export-secret-keys <KEYID>
-#        - add two repo secrets: FLATPAK_GPG_KEY (the private-key armor) and
-#          FLATPAK_GPG_KEYID (the key id), then uncomment the signing lines below.
-#   3. Change the trigger from `workflow_dispatch:` to also run on push to main.
-#
-# See docs/DISTRIBUTION.md for the full walkthrough.
+# Needs (see docs/DISTRIBUTION.md):
+#   * Settings → Pages → Source: "GitHub Actions"
+#   * the FLATPAK_GPG_KEY repository secret (the armored private key), and
+#     FLATPAK_GPG_PASSPHRASE if the key has a passphrase
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
-  # push:
-  #   branches: [main]
 
 permissions:
   contents: read
@@ -35,22 +30,59 @@ jobs:
     name: Build repository
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      image: ghcr.io/andyholmes/flatter/gnome:49
       options: --privileged
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      # Uncomment to import the signing key (needs the secrets from step 2 above):
-      # - name: Import GPG key
-      #   run: echo "${{ secrets.FLATPAK_GPG_KEY }}" | gpg --import
+      # flatpak-builder unpacks the IBM Plex font archives (.zip) with the
+      # container's unzip, which Flatter's image doesn't ship.
+      - name: Install unzip
+        run: dnf install -y unzip
+
+      - name: Import signing key
+        id: gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.FLATPAK_GPG_KEY }}
+          # Only needed if the key has a passphrase; the action presets it in
+          # gpg-agent, as there's nobody to type it on the runner.
+          passphrase: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+
+      # A .flatpakref lets GNOME Software install Easel (and add the repo for
+      # updates) in one click from the landing page.
+      - name: Write one-click install file
+        run: |
+          key=$(gpg2 --export "${{ steps.gpg.outputs.fingerprint }}" | base64 -w0)
+          cat > pages/io.github.drvonmiau.Easel.flatpakref <<EOF
+          [Flatpak Ref]
+          Name=io.github.drvonmiau.Easel
+          Branch=master
+          Title=Easel
+          Description=Browse your local photos
+          Homepage=https://drvonmiau.github.io/easel/
+          Icon=https://drvonmiau.github.io/easel/io.github.drvonmiau.Easel.png
+          Url=https://drvonmiau.github.io/easel/
+          SuggestRemoteName=easel
+          RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          IsRuntime=false
+          GPGKey=$key
+          EOF
 
       - name: Build and stage repo
         uses: andyholmes/flatter@main
         with:
           files: io.github.drvonmiau.Easel.json
+          gpg-sign: ${{ steps.gpg.outputs.fingerprint }}
           upload-pages-artifact: true
-          # gpg-sign: ${{ secrets.FLATPAK_GPG_KEYID }}
+          upload-pages-includes: |
+            pages/index.html
+            pages/io.github.drvonmiau.Easel.flatpakref
+            pages/media/easel-gallery.webp
+            pages/media/easel-details.webp
+            pages/media/easel-editor.webp
+            data/icons/hicolor/512x512/apps/io.github.drvonmiau.Easel.png
 
   deploy:
     name: Deploy to Pages
