@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Easel — a gallery for the photos you own</title>
+<meta name="description" content="Easel shows the photos already on your disk by folder, album, person and place, and edits them without touching the original. A GNOME app, installed as a Flatpak.">
+<link rel="icon" href="io.github.drvonmiau.Easel.png">
+<style>
+  :root {
+    --bg: #f3f4f6; --card: #ffffff; --fg: #1c1e24; --soft: #56669a;
+    --accent: #5565bf; --accent-fg: #ffffff; --code: #eceff8; --line: #dfe3f0;
+    --shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 24px rgba(0,0,0,.16);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1e; --card: #2a2a2a; --fg: #eff0f4; --soft: #a7b2da;
+      --accent: #7a89dd; --accent-fg: #141a36; --code: #2b2e38; --line: #373b48;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.45);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 48px 16px 64px; }
+  .card {
+    background: var(--card); border-radius: 16px; padding: 32px; min-width: 0;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 12px 32px rgba(0,0,0,.08);
+  }
+  /* The card is wide for the media; running text keeps a readable measure. */
+  .prose { max-width: 80ch; }
+  header { display: flex; gap: 20px; align-items: center; margin-bottom: 24px; }
+  header img { width: 96px; height: 96px; flex: none; }
+  header .title { flex: 1; min-width: 0; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -.01em; }
+  .tagline { margin: 4px 0 0; color: var(--soft); }
+  h2 {
+    font: 500 12px/1.4 "IBM Plex Mono", ui-monospace, monospace;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--soft);
+    margin: 40px 0 12px;
+  }
+  p { margin: 8px 0; }
+  a { color: var(--accent); }
+  code { font: 14px "IBM Plex Mono", ui-monospace, monospace; }
+  .note { color: var(--soft); font-size: 14px; overflow-wrap: anywhere; }
+  .lead { font-size: 18px; }
+
+  /* Install: a split button. The main part installs with GNOME Software; the
+     arrow opens a menu with both ways, the terminal one showing a dialog. */
+  .install { position: relative; display: flex; flex: none; }
+  .button, .more {
+    background: var(--accent); color: var(--accent-fg); border: 0; cursor: pointer;
+    font: 600 15px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .04em;
+    text-decoration: none; padding: 14px 20px; border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .button:hover, .more:hover { filter: brightness(1.06); }
+  .button:focus-visible, .more:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .install.ready .button { border-radius: 10px 0 0 10px; }
+  .more {
+    display: none; padding: 14px 12px; border-radius: 0 10px 10px 0;
+    border-left: 1px solid color-mix(in srgb, var(--accent-fg) 30%, transparent);
+  }
+  .install.ready .more { display: inline-flex; }
+  .more svg { width: 14px; height: 14px; transition: transform .15s; }
+  .more[aria-expanded="true"] svg { transform: rotate(180deg); }
+  .menu {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 10; min-width: 270px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 6px; margin: 0; list-style: none;
+  }
+  .menu[hidden] { display: none; }
+  .menu a, .menu button {
+    display: block; width: 100%; text-align: left; padding: 10px 12px; border: 0;
+    border-radius: 8px; background: none; color: var(--fg); cursor: pointer;
+    font: 15px/1.3 inherit; font-family: inherit; text-decoration: none;
+  }
+  .menu small { display: block; color: var(--soft); font-size: 13px; margin-top: 2px; }
+  .menu a:hover, .menu button:hover, .menu a:focus-visible, .menu button:focus-visible {
+    background: var(--code); outline: none;
+  }
+
+  dialog {
+    width: min(640px, calc(100vw - 32px)); border: 0; border-radius: 16px; padding: 24px;
+    background: var(--card); color: var(--fg); box-shadow: var(--shadow);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h3 { margin: 0 40px 12px 0; font-size: 18px; }
+  dialog .close {
+    position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border: 0;
+    border-radius: 50%; background: var(--code); color: var(--fg); cursor: pointer;
+    display: grid; place-items: center;
+  }
+  dialog .close svg { width: 14px; height: 14px; }
+  dialog .close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  pre {
+    background: var(--code); border-radius: 10px; padding: 14px 16px; margin: 0;
+    font: 13px/1.6 "IBM Plex Mono", ui-monospace, monospace;
+    overflow-x: auto; white-space: pre; max-width: 100%;
+  }
+
+  /* Screenshot carousel: native horizontal scroll with snap points, so
+     swipe and trackpad work without JS; the next slide peeks in at the edge.
+     JS only adds the arrows, dots and arrow-key handling. */
+  .carousel { position: relative; margin: 28px -32px 8px; }
+  .track {
+    display: flex; align-items: flex-start; gap: 16px; overflow-x: auto;
+    scroll-snap-type: x mandatory; scroll-padding: 0 32px; padding: 4px 32px 16px;
+    scrollbar-width: none; overscroll-behavior-x: contain;
+  }
+  .track::-webkit-scrollbar { display: none; }
+  .track:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
+  /* Every slide has the same height and its own width, so screenshots of
+     different shapes line up and the next one still peeks in. */
+  .slide { flex: 0 0 auto; max-width: 86%; margin: 0; scroll-snap-align: start; }
+  .slide img, .slide video {
+    /* Tall enough to fill, low enough that the widest shot (about 2:1)
+       still fits the 86% slide width without letterboxing. */
+    display: block; height: min(420px, calc((100vw - 96px) * .43)); width: auto; max-width: 100%;
+    object-fit: contain; border-radius: 12px; background: var(--code);
+    box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.12);
+  }
+  /* Captions wrap to the picture's width instead of widening the slide. */
+  figcaption {
+    width: 0; min-width: 100%; margin-top: 8px; font-size: 14px; color: var(--soft);
+    text-align: center;
+  }
+  .arrow {
+    position: absolute; top: calc(50% - 30px); width: 40px; height: 40px;
+    border: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+    background: var(--card); color: var(--fg); opacity: .92;
+    box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 4px 12px rgba(0,0,0,.18);
+    transition: opacity .15s;
+  }
+  .arrow:hover { opacity: 1; }
+  .arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .arrow[disabled] { opacity: 0; pointer-events: none; }
+  .arrow.prev { left: 12px; } .arrow.next { right: 12px; }
+  .arrow svg { width: 18px; height: 18px; }
+  .dots { display: flex; justify-content: center; gap: 4px; }
+  .dots button {
+    width: 24px; height: 24px; border: 0; padding: 0; background: none; cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .dots button::after {
+    content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line);
+    transition: background .15s, transform .15s;
+  }
+  .dots button[aria-current="true"]::after { background: var(--accent); transform: scale(1.25); }
+  .dots button:focus-visible { outline: 2px solid var(--accent); border-radius: 50%; }
+  .carousel:not(.ready) .arrow, .carousel:not(.ready) .dots { display: none; }
+  @media (prefers-reduced-motion: reduce) { .track { scroll-behavior: auto; } }
+
+  /* Copy button in the corner of a terminal snippet. */
+  .code { position: relative; margin: 12px 0; }
+  .code pre { padding-right: 52px; }
+  .copy {
+    position: absolute; top: 8px; right: 8px; width: 34px; height: 34px;
+    border: 0; border-radius: 8px; cursor: pointer; display: grid; place-items: center;
+    background: var(--card); color: var(--soft); opacity: .9;
+    box-shadow: 0 1px 2px rgba(0,0,0,.1);
+  }
+  .copy:hover { color: var(--fg); opacity: 1; }
+  .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .copy svg { width: 16px; height: 16px; }
+  .copy .done { display: none; color: var(--accent); }
+  .copy.copied .idle { display: none; }
+  .copy.copied .done { display: block; }
+  .copy:not(.ready) { display: none; }
+
+  /* Comparison table; rows stack into cards on narrow screens. */
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 16px 12px 0; }
+  thead th {
+    font: 500 12px/1.4 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--soft); border-bottom: 1px solid var(--line);
+  }
+  tbody tr + tr > * { border-top: 1px solid var(--line); }
+  tbody th { font-weight: 600; white-space: nowrap; }
+  tbody td:nth-child(2) { color: var(--soft); width: 32%; }
+
+  /* FAQ */
+  .faq { border-top: 1px solid var(--line); }
+  details { border-bottom: 1px solid var(--line); }
+  summary {
+    cursor: pointer; list-style: none; padding: 14px 32px 14px 0; font-weight: 600;
+    position: relative;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::after {
+    content: "+"; position: absolute; right: 4px; top: 10px; font: 400 22px/1 inherit;
+    color: var(--soft);
+  }
+  details[open] summary::after { content: "–"; }
+  summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  details > :not(summary) { margin: 0 0 12px; max-width: 80ch; }
+  details > p:last-child, details > .code:last-child { margin-bottom: 16px; }
+
+  footer { margin-top: 24px; text-align: center; font-size: 14px; color: var(--soft); }
+
+  @media (max-width: 700px) {
+    table, tbody, tr, th, td { display: block; }
+    thead { display: none; }
+    tbody tr { padding: 12px 0; }
+    tbody tr + tr { border-top: 1px solid var(--line); }
+    tbody tr + tr > * { border-top: 0; }
+    th, td { padding: 2px 0; }
+    tbody td:nth-child(2) { width: auto; }
+  }
+  @media (max-width: 600px) {
+    header { flex-wrap: wrap; }
+    header img { width: 72px; height: 72px; }
+    .install { flex-basis: 100%; }
+    .install .button { flex: 1; justify-content: center; }
+    .menu { left: 0; right: 0; min-width: 0; }
+  }
+  @media (max-width: 480px) {
+    .card { padding: 20px; }
+    .carousel { margin-left: -20px; margin-right: -20px; }
+    .track { scroll-padding: 0 20px; padding-left: 20px; padding-right: 20px; }
+    .arrow { display: none; }
+    .slide img, .slide video { height: calc((100vw - 72px) * .43); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <header>
+      <img src="io.github.drvonmiau.Easel.png" alt="">
+      <div class="title">
+        <h1>Easel</h1>
+        <p class="tagline">A calm, offline gallery for your photos on GNOME.</p>
+      </div>
+      <div class="install">
+        <a class="button" href="io.github.drvonmiau.Easel.flatpakref">Install</a>
+        <button class="more" type="button" aria-label="More ways to install"
+                aria-haspopup="true" aria-expanded="false" aria-controls="install-menu">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <ul class="menu" id="install-menu" hidden>
+          <li><a href="io.github.drvonmiau.Easel.flatpakref">Install with GNOME Software
+            <small>Opens your app store; updates arrive like any other app</small></a></li>
+          <li><button type="button" data-open="terminal-dialog">Install from a terminal…
+            <small>Two <code>flatpak</code> commands to copy</small></button></li>
+        </ul>
+      </div>
+    </header>
+
+    <div class="prose">
+      <p class="lead">Easel shows the photos already on your disk, where they are.
+        No importing, no cloud, no account — it reads your folders in place and never
+        goes online, not even for the map.</p>
+      <p>Browse everything at once or by folder, album, person or place, and make quick
+        edits that are saved as a new copy, so the original stays exactly as it
+        was.</p>
+    </div>
+
+    <section class="carousel" aria-roledescription="carousel" aria-label="Screenshots and videos">
+      <div class="track" tabindex="0">
+        <figure class="slide" aria-roledescription="slide" aria-label="1 of 3">
+          <img src="easel-gallery.webp" width="1272" height="829"
+               alt="Easel's All photos view, a grid of square photo tiles">
+          <figcaption>Every photo at once, or by folder, album, person or place.</figcaption>
+        </figure>
+        <figure class="slide" aria-roledescription="slide" aria-label="2 of 3">
+          <img src="easel-details.webp" width="1272" height="829" loading="lazy"
+               alt="A selected photo with its album, date, size and file name in the side panel">
+          <figcaption>Pick a photo to see its details, or tag who's in it.</figcaption>
+        </figure>
+        <figure class="slide" aria-roledescription="slide" aria-label="3 of 3">
+          <img src="easel-editor.webp" width="1272" height="829" loading="lazy"
+               alt="The editor, with sliders for brightness, contrast, saturation, exposure and temperature, and a row of filters">
+          <figcaption>Adjust, crop and filter. Your edit is saved as a new copy.</figcaption>
+        </figure>
+      </div>
+      <button class="arrow prev" type="button" aria-label="Previous slide">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="arrow next" type="button" aria-label="Next slide">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="dots"></div>
+    </section>
+
+    <h2 id="compare">How Easel compares</h2>
+    <p class="prose">Easel is small on purpose. If one of these fits you better, it's a
+      great choice:</p>
+    <table>
+      <thead><tr><th scope="col">App</th><th scope="col">Made for</th><th scope="col">Compared with Easel</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Image Viewer</th>
+          <td>Opening one picture from Files</td>
+          <td>GNOME's own viewer, with no library. Easel shows all your photos, by
+            folder, album, person and place.</td></tr>
+        <tr><th scope="row">Shotwell</th>
+          <td>Importing and organising photos by event</td>
+          <td>Built around an import step and events. Easel just reads your folders
+            where they are.</td></tr>
+        <tr><th scope="row">gThumb</th>
+          <td>Browsing folders, with many tools and formats</td>
+          <td>Does more, with more settings. Easel is simpler, with a newer GNOME
+            design.</td></tr>
+        <tr><th scope="row">digiKam</th>
+          <td>Large, professional collections and RAW workflows</td>
+          <td>A full photo manager. Easel is a calm gallery for everyday photos.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="faq">Questions</h2>
+    <div class="faq">
+      <details>
+        <summary>Which files can Easel show?</summary>
+        <p>JPEG, PNG, WebP, HEIC/HEIF, AVIF, GIF and TIFF photos, plus MP4, MOV, MKV
+          and WebM videos, with thumbnails for both.</p>
+      </details>
+      <details>
+        <summary>Do I have to import or move my photos?</summary>
+        <p>No. Easel reads your folders in place and watches them for new photos. It
+          never moves, renames or copies anything into a library of its own.</p>
+      </details>
+      <details>
+        <summary>Does Easel change my photos?</summary>
+        <p>No. Edits, crops, rotations and filters are saved as a new copy that keeps
+          the original's date and other EXIF data. Albums, favourites and names are
+          kept in Easel's own folder. The only change it makes on disk is moving a
+          photo to the Trash when you ask it to.</p>
+      </details>
+      <details>
+        <summary>How does the map work without going online?</summary>
+        <p>Easel ships its own world map, built from OpenStreetMap data, and places each
+          photo by the GPS location in its metadata. No map tiles are ever
+          downloaded — Easel has no network access at all.</p>
+      </details>
+      <details>
+        <summary>Why does GNOME Software list broad permissions?</summary>
+        <p>Easel can read your home folder so it can show photos wherever you keep
+          them, and network shares or phones mounted in Files. It also reads your
+          system's icon theme so its buttons match your desktop. All of this is
+          read-only, and Easel has no network access to upload anything. Saving an
+          edited copy or moving a photo to the Trash goes through your desktop's own
+          file dialog and Trash, and only when you ask.</p>
+      </details>
+      <details>
+        <summary>Why isn't Easel on Flathub?</summary>
+        <p>Flathub doesn't accept new apps made with AI assistance, and Easel was
+          built with help from Claude. It's published from its own signed
+          repository instead, and updates arrive through GNOME Software or
+          <code>flatpak update</code> like any other app.</p>
+      </details>
+      <details id="terminal">
+        <summary>How do I install or remove it from a terminal?</summary>
+        <p>To install:</p>
+        <div class="code">
+<pre>flatpak remote-add --user --if-not-exists easel \
+    https://drvonmiau.github.io/easel/index.flatpakrepo
+flatpak install --user easel io.github.drvonmiau.Easel</pre>
+          <button class="copy" type="button" aria-label="Copy commands" title="Copy">
+            <svg class="idle" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            <svg class="done" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <p>To remove Easel and its repository:</p>
+        <div class="code">
+<pre>flatpak uninstall --user io.github.drvonmiau.Easel
+flatpak remote-delete --user easel</pre>
+          <button class="copy" type="button" aria-label="Copy commands" title="Copy">
+            <svg class="idle" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            <svg class="done" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </details>
+    </div>
+
+    <h2>About</h2>
+    <p class="prose">Free software under the GPL 3.0 or later, made by Dr. von Miau.
+      <a href="https://github.com/DrVonMiau/easel">Source and issues on GitHub</a>.</p>
+  </div>
+  <footer>
+    A sibling of <a href="https://github.com/DrVonMiau/lyre">Lyre</a>,
+    <a href="https://github.com/DrVonMiau/Quill">Quill</a> and
+    <a href="https://github.com/DrVonMiau/dice">Dice</a>
+  </footer>
+</main>
+
+<dialog id="terminal-dialog" aria-labelledby="terminal-title">
+  <h3 id="terminal-title">Install from a terminal</h3>
+  <button class="close" type="button" aria-label="Close">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="code">
+<pre>flatpak remote-add --user --if-not-exists easel \
+    https://drvonmiau.github.io/easel/index.flatpakrepo
+flatpak install --user easel io.github.drvonmiau.Easel</pre>
+    <button class="copy" type="button" aria-label="Copy commands" title="Copy">
+      <svg class="idle" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <svg class="done" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <p class="note">Updates then arrive with <code>flatpak update</code>. You need
+    <a href="https://flatpak.org/setup/">Flatpak</a>, which most Linux
+    distributions already have.</p>
+</dialog>
+
+<script>
+// Install menu: the arrow next to Install opens it; Escape, a click outside or
+// picking an item closes it. Up/Down move between the items.
+{
+  const box = document.querySelector(".install");
+  const more = box.querySelector(".more");
+  const menu = box.querySelector(".menu");
+  const items = () => [...menu.querySelectorAll("a, button")];
+  const open = (focusFirst) => {
+    menu.hidden = false;
+    more.setAttribute("aria-expanded", "true");
+    if (focusFirst) items()[0].focus();
+  };
+  const close = (refocus) => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    more.setAttribute("aria-expanded", "false");
+    if (refocus) more.focus();
+  };
+  more.addEventListener("click", () => (menu.hidden ? open(false) : close(false)));
+  more.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); open(true); }
+  });
+  menu.addEventListener("keydown", (e) => {
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); close(true); }
+    if (e.key === "ArrowDown") { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+  });
+  menu.addEventListener("click", () => close(false));
+  document.addEventListener("click", (e) => { if (!box.contains(e.target)) close(false); });
+  box.addEventListener("focusout", (e) => { if (!box.contains(e.relatedTarget)) close(false); });
+  box.classList.add("ready");
+}
+
+// Dialogs: buttons with data-open show one; the close button or a click on the
+// backdrop hides it (Escape is built in).
+for (const btn of document.querySelectorAll("[data-open]")) {
+  const dialog = document.getElementById(btn.dataset.open);
+  btn.addEventListener("click", () => dialog.showModal());
+}
+for (const dialog of document.querySelectorAll("dialog")) {
+  dialog.querySelector(".close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+}
+
+// Screenshot carousel. Scrolling is native (swipe, trackpad, scroll-snap);
+// this only wires up the arrows, the dots and the arrow keys, and plays a
+// video only while its slide is on screen.
+for (const root of document.querySelectorAll(".carousel")) {
+  const track = root.querySelector(".track");
+  const slides = [...track.children];
+  const prev = root.querySelector(".prev");
+  const next = root.querySelector(".next");
+  const dotBox = root.querySelector(".dots");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const smooth = reduced ? "auto" : "smooth";
+  const dots = slides.map((_, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", `Show slide ${i + 1}`);
+    b.addEventListener("click", () => go(i));
+    dotBox.append(b);
+    return b;
+  });
+  // Index of the slide whose left edge is nearest the track's snap edge.
+  const current = () => {
+    const pad = parseFloat(getComputedStyle(track).scrollPaddingLeft) || 0;
+    let best = 0, dist = Infinity;
+    slides.forEach((s, i) => {
+      const d = Math.abs(s.offsetLeft - pad - track.scrollLeft);
+      if (d < dist) { dist = d; best = i; }
+    });
+    return best;
+  };
+  const go = (i) => {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    const pad = parseFloat(getComputedStyle(track).scrollPaddingLeft) || 0;
+    track.scrollTo({ left: slides[i].offsetLeft - pad, behavior: smooth });
+  };
+  const update = () => {
+    const i = current();
+    const end = track.scrollLeft >= track.scrollWidth - track.clientWidth - 2;
+    dots.forEach((d, j) => d.setAttribute("aria-current", j === i ? "true" : "false"));
+    prev.disabled = track.scrollLeft <= 2;
+    next.disabled = end;
+  };
+  prev.addEventListener("click", () => go(current() - 1));
+  next.addEventListener("click", () => go(current() + 1));
+  track.addEventListener("keydown", (e) => {
+    if (e.target !== track) return;  // leave video controls their own keys
+    if (e.key === "ArrowLeft") { e.preventDefault(); go(current() - 1); }
+    if (e.key === "ArrowRight") { e.preventDefault(); go(current() + 1); }
+  });
+  track.addEventListener("scroll", () => requestAnimationFrame(update), { passive: true });
+  addEventListener("resize", update);
+
+  // Videos play (muted, looping) while mostly visible and pause otherwise.
+  // With reduced motion they wait for the viewer to press play.
+  const videos = root.querySelectorAll("video");
+  if (!reduced && "IntersectionObserver" in window) {
+    const seen = new IntersectionObserver((entries) => {
+      for (const { target, isIntersecting } of entries) {
+        if (isIntersecting) target.play().catch(() => {});
+        else target.pause();
+      }
+    }, { root: null, threshold: 0.6 });
+    videos.forEach((v) => seen.observe(v));
+  }
+
+  root.classList.add("ready");
+  update();
+}
+
+// Copy buttons on terminal snippets.
+for (const btn of document.querySelectorAll(".copy")) {
+  const pre = btn.parentElement.querySelector("pre");
+  let timer;
+  btn.addEventListener("click", async () => {
+    const text = pre.textContent.trim() + "\n";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Older browsers or no permission: select it so Ctrl+C works.
+      getSelection().selectAllChildren(pre);
+      return;
+    }
+    btn.classList.add("copied");
+    btn.setAttribute("aria-label", "Copied");
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.setAttribute("aria-label", "Copy commands");
+    }, 1500);
+  });
+  btn.classList.add("ready");
+}
+</script>
+</body>
+</html>

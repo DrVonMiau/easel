@@ -47,18 +47,19 @@ original file.
 
 ## Install
 
-Grab the latest `.flatpak` bundle from the
-[**Releases**](https://github.com/DrVonMiau/easel/releases) page, then install
-and run it:
+Get Easel from **<https://drvonmiau.github.io/easel/>** — the Install button opens GNOME Software, and
+updates then arrive like any other app's. Or from a terminal:
 
 ```sh
-flatpak install --user io.github.drvonmiau.Easel.flatpak
-flatpak run io.github.drvonmiau.Easel
+flatpak remote-add --user --if-not-exists easel https://drvonmiau.github.io/easel/index.flatpakrepo
+flatpak install --user easel io.github.drvonmiau.Easel
 ```
 
-The first command may offer to pull in the GNOME runtime the app needs — say
-yes. You only need [Flatpak](https://flatpak.org/setup/) installed, which most
-Linux distributions already have.
+You only need [Flatpak](https://flatpak.org/setup/), which most Linux
+distributions already have. Easel isn't on Flathub, which doesn't accept apps
+made with AI assistance; it ships from its own signed repository instead.
+Each [release](https://github.com/DrVonMiau/easel/releases) also carries a
+single-file `.flatpak` bundle, which doesn't update itself.
 
 ## Building from source
 
